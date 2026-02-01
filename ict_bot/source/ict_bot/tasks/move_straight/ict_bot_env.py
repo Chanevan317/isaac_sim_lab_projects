@@ -1,0 +1,193 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+from __future__ import annotations
+
+import math
+import torch
+from collections.abc import Sequence
+
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation
+from isaaclab.envs import DirectRLEnv
+from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+from isaaclab.utils.math import sample_uniform
+
+from .ict_bot_env_cfg import IctBotEnvCfg
+
+
+class IctBotEnv(DirectRLEnv):
+    cfg: IctBotEnvCfg
+
+    def __init__(self, cfg: IctBotEnvCfg, render_mode: str | None = None, **kwargs):
+        super().__init__(cfg, render_mode, **kwargs)
+        
+        # Dynamically find the indices based on the names in your config
+        # This returns a list of integers [idx1, idx2]
+        indices, _ = self.robot.find_joints(["right_wheel_joint", "left_wheel_joint"])
+
+        # 2. Convert to a long tensor for indexing
+        self._wheel_indices = torch.tensor(indices, device=self.device, dtype=torch.long)
+        
+        self.R = self.cfg.wheel_radius
+        self.L = self.cfg.wheel_spacing
+
+        # Initialize buffers used in dones/rewards
+        self.y_drift = torch.zeros(self.num_envs, device=self.device)
+        self.forward_vel = torch.zeros(self.num_envs, device=self.device)
+        self.yaw_rate = torch.zeros(self.num_envs, device=self.device)
+
+    def _setup_scene(self):
+        # create the asset
+        self.robot = Articulation(self.cfg.robot_cfg)
+        
+        # add articulation to scene
+        self.scene.articulations["robot"] = self.robot
+        
+        # add ground plane
+        spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
+        
+        # add lights
+        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+        light_cfg.func("/World/Light", light_cfg)
+        
+        # clone and replicate
+        self.scene.clone_environments(copy_from_source=False)
+        
+        # we need to explicitly filter collisions for CPU simulation
+        if self.device == "cpu":
+            self.scene.filter_collisions(global_prim_paths=[])
+
+    def _pre_physics_step(self, actions: torch.Tensor) -> None:
+        self.actions = actions.clone()
+
+    def _apply_action(self):
+        actions = self.actions
+
+        # Scale normalized actions [-1, 1] to max velocities
+        lin_vel = actions[:, 0] * self.cfg.max_linear_velocity
+        ang_vel = actions[:, 1] * self.cfg.max_angular_velocity
+        
+        v_left =  (lin_vel - (ang_vel * self.L / 2.0)) / self.R
+        v_right = (lin_vel + (ang_vel * self.L / 2.0)) / self.R
+        
+        wheel_speeds = torch.stack([v_left, v_right], dim=-1)
+        self.robot.set_joint_velocity_target(wheel_speeds, joint_ids=self._wheel_indices)
+
+
+    def _get_observations(self) -> dict:
+        obs = torch.cat([
+            self.robot.data.root_pos_w,             # [0:3]  (x, y, z)
+            self.robot.data.root_quat_w,            # [3:7]  (w, x, y, z)
+            self.robot.data.root_lin_vel_w,         # [7:10] (vx, vy, vz)
+            self.robot.data.root_ang_vel_w[:, :2]   # [10:12] (wx, wy)
+        ], dim=-1)
+        return {"policy": obs}
+
+
+    def _compute_intermediate_values(self):
+        # Get world-space data
+        self.root_pos = self.robot.data.root_pos_w
+        self.root_vel = self.robot.data.root_vel_w
+        
+        # Extract values for rewards
+        # Forward velocity (X-axis) = Progress
+        self.forward_vel = self.root_vel[:, 0]
+        
+        # Sideways position (Y-axis) = Drift
+        # self.y_drift = self.root_pos[:, 1]
+        # World-frame velocity
+        vel_world = self.robot.data.root_lin_vel_w[:, :2]  # vx, vy
+
+        # Robot yaw
+        quat = self.robot.data.root_quat_w
+        yaw = torch.atan2(
+            2.0 * (quat[:, 0] * quat[:, 3] + quat[:, 1] * quat[:, 2]),
+            1.0 - 2.0 * (quat[:, 2]**2 + quat[:, 3]**2)
+        )
+
+        # Rotate into body frame
+        sin_yaw = torch.sin(yaw)
+        cos_yaw = torch.cos(yaw)
+
+        # Body-frame lateral velocity
+        v_lat = -sin_yaw * vel_world[:, 0] + cos_yaw * vel_world[:, 1]
+
+        self.y_drift = v_lat
+        
+        # Angular velocity (Yaw-rate) = Turning
+        self.yaw_rate = self.root_vel[:, 5]  # Index 5 is wz
+
+
+    def _get_rewards(self) -> torch.Tensor:
+        # Progress Reward: Encourage moving forward on X
+        progress = self.forward_vel * self.cfg.reward_scales["progress_reward"]
+        
+        # Straightness Penalty: Penalize distance from the Y=0 center line
+        # We use abs() so drifting left or right is equally bad
+        drift = torch.abs(self.y_drift) * self.cfg.reward_scales["straightness_penalty"]
+        
+        # Heading Penalty: Penalize excessive turning/spinning
+        heading = torch.abs(self.yaw_rate) * self.cfg.reward_scales["heading_penalty"]
+        
+        # Total Reward
+        return progress + drift + heading
+
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # Truncation: Check if the timer (episode_length_buf) reached the limit
+        # max_episode_length is automatically calculated from your episode_length_s
+        time_out = self.episode_length_buf >= self.max_episode_length
+        
+        # Termination: Check if the robot drifted too far or turned too much
+        # Drift check (using your y_drift_limit)
+        out_of_bounds = torch.abs(self.y_drift) > self.cfg.y_drift_limit
+        
+        # Optional: Check if the robot flipped or went out of yaw limits
+        # You'd need to extract 'yaw' in intermediate values for this
+        # died = out_of_bounds | (torch.abs(self.yaw) > self.cfg.yaw_limit)
+        
+        died = out_of_bounds
+        
+        # Return: (Terminated, Truncated)
+        return died, time_out
+
+    def _reset_idx(self, env_ids: Sequence[int] | None):
+        # Handle 'None' by converting to a tensor of all environment indices
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            # Ensure it is a tensor on the correct device (GPU)
+            env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+
+        # Reset Robot Root Pose (Position at 0,0,0 and Identity Rotation)
+        # We create a tensor of shape [num_resets, 7] -> [x, y, z, qw, qx, qy, qz]
+        num_resets = len(env_ids)
+        root_states = torch.zeros((num_resets, 7), device=self.device)
+        # root_states[:, 3] = 1.0  # Set Quaternion W to 1.0 (Identity rotation)
+        root_states[:, 3] = 1.0
+        
+        # Teleport the specific robots back to start
+        self.robot.write_root_pose_to_sim(root_states, env_ids=env_ids)
+
+        # Reset Robot Velocities (Stop all movement)
+        # Tensor of shape [num_resets, 6] -> [vx, vy, vz, wx, wy, wz]
+        root_velocities = torch.zeros((num_resets, 6), device=self.device)
+        self.robot.write_root_velocity_to_sim(root_velocities, env_ids=env_ids)
+
+        # Reset Wheel Joint Positions and Velocities to Zero
+        num_wheels = len(self._wheel_indices)
+        joint_pos = torch.zeros((num_resets, num_wheels), device=self.device)
+        joint_vel = torch.zeros((num_resets, num_wheels), device=self.device)
+
+        self.robot.write_joint_state_to_sim(
+            joint_pos, 
+            joint_vel, 
+            joint_ids=self._wheel_indices, # Mapping [N, 2] -> [N, 5]
+            env_ids=env_ids
+        )
+
+        # Reset Internal Buffers (CRITICAL for skrl and timing)
+        self.episode_length_buf[env_ids] = 0
+        self.reset_buf[env_ids] = 0
