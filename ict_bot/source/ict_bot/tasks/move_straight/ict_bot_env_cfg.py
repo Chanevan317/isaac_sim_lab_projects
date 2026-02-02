@@ -19,7 +19,7 @@ class IctBotEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     # - spaces definition
     action_space = 2        # [linear_vel, angular_vel]
-    observation_space = 12  # Matches the 'obs' tensor we build
+    observation_space = 13  # Matches the 'obs' tensor we build
     state_space = 0          # Usually 0 unless using asymmetric actor-critic
 
     # simulation
@@ -27,10 +27,9 @@ class IctBotEnvCfg(DirectRLEnvCfg):
 
     # robot(s)
     robot_cfg: ArticulationCfg = ICT_BOT_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    # robot_cfg: ArticulationCfg = ICT_BOT_CFG.replace(prim_path="/World/ict_bot")
 
     # scene
-    num_envs=1024
+    num_envs=4096
     env_spacing=5.0
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=num_envs, 
@@ -39,8 +38,8 @@ class IctBotEnvCfg(DirectRLEnvCfg):
     )
     
     # Physical properties
-    wheel_radius = 1.0
-    wheel_spacing = 1.6
+    wheel_radius = 0.1
+    wheel_spacing = 0.16
     max_linear_velocity = 0.5   # meters per second
     max_angular_velocity = 2.0  # radians per second
 
@@ -55,9 +54,9 @@ class IctBotEnvCfg(DirectRLEnvCfg):
     # - reward scales
     reward_scales = {
         "progress_reward" : 1.0,        # Reward for velocity along the X-axis 
-        "straightness_penalty" : -0.5,  # Penalty for velocity along the Y-axis (drifting)
-        "heading_penalty" : -0.2,       # Penalty for angular velocity (turning)
-        "termination": -10.0            # Penalty for hitting reset limits
+        "straightness_penalty" : -0.1,  # Penalty for velocity along the Y-axis (drifting)
+        "heading_penalty" : -0.05,       # Penalty for angular velocity (turning)
+        "idle_penalty" : -0.05,          # Small penalty to encourage movement
     }
     # - reset states/conditions
     y_drift_limit = 1.0       # Reset if robot drifts > 1m from center

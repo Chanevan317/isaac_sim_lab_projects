@@ -82,7 +82,7 @@ class IctBotEnv(DirectRLEnv):
             self.robot.data.root_pos_w,             # [0:3]  (x, y, z)
             self.robot.data.root_quat_w,            # [3:7]  (w, x, y, z)
             self.robot.data.root_lin_vel_w,         # [7:10] (vx, vy, vz)
-            self.robot.data.root_ang_vel_w[:, :2]   # [10:12] (wx, wy)
+            self.robot.data.root_ang_vel_w          # [10:13] (wx, wy, wz)
         ], dim=-1)
         return {"policy": obs}
 
@@ -118,22 +118,25 @@ class IctBotEnv(DirectRLEnv):
         self.y_drift = v_lat
         
         # Angular velocity (Yaw-rate) = Turning
-        self.yaw_rate = self.root_vel[:, 5]  # Index 5 is wz
+        self.yaw_rate = self.robot.data.root_ang_vel_w[:, 2]
 
 
     def _get_rewards(self) -> torch.Tensor:
         # Progress Reward: Encourage moving forward on X
-        progress = self.forward_vel * self.cfg.reward_scales["progress_reward"]
+        progress_reward = self.forward_vel * self.cfg.reward_scales["progress_reward"]
         
         # Straightness Penalty: Penalize distance from the Y=0 center line
         # We use abs() so drifting left or right is equally bad
-        drift = torch.abs(self.y_drift) * self.cfg.reward_scales["straightness_penalty"]
+        drift_penalty = torch.abs(self.y_drift) * self.cfg.reward_scales["straightness_penalty"]
         
         # Heading Penalty: Penalize excessive turning/spinning
-        heading = torch.abs(self.yaw_rate) * self.cfg.reward_scales["heading_penalty"]
+        heading_penalty = torch.abs(self.yaw_rate) * self.cfg.reward_scales["heading_penalty"]
+        
+        # Idle Penalty: Penalize if robot is not moving (i.e., forward velocity is low)
+        idle_penalty = (torch.abs(self.forward_vel) < 0.01) * self.cfg.reward_scales["idle_penalty"]
         
         # Total Reward
-        return progress + drift + heading
+        return progress_reward - drift_penalty - heading_penalty - idle_penalty
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         # Truncation: Check if the timer (episode_length_buf) reached the limit
@@ -144,7 +147,7 @@ class IctBotEnv(DirectRLEnv):
         # Drift check (using your y_drift_limit)
         out_of_bounds = torch.abs(self.y_drift) > self.cfg.y_drift_limit
         
-        # Optional: Check if the robot flipped or went out of yaw limits
+        # Check if the robot flipped or went out of yaw limits
         # You'd need to extract 'yaw' in intermediate values for this
         # died = out_of_bounds | (torch.abs(self.yaw) > self.cfg.yaw_limit)
         
@@ -164,9 +167,17 @@ class IctBotEnv(DirectRLEnv):
         # Reset Robot Root Pose (Position at 0,0,0 and Identity Rotation)
         # We create a tensor of shape [num_resets, 7] -> [x, y, z, qw, qx, qy, qz]
         num_resets = len(env_ids)
-        root_states = torch.zeros((num_resets, 7), device=self.device)
-        # root_states[:, 3] = 1.0  # Set Quaternion W to 1.0 (Identity rotation)
-        root_states[:, 3] = 1.0
+        root_states = self.robot.data.default_root_state[env_ids, :7].clone()
+        
+        # Add environment origins
+        # root_states[:, :3] = self.scene.env_origins[env_ids]
+        root_states[:, :2] += self.scene.env_origins[env_ids, :2]
+
+        # if len(env_ids) > 0:
+        #     first_env_idx = env_ids[0].item()
+        #     print(f"\n--- Reset Debug (Env {first_env_idx}) ---")
+        #     print(f"Position (X, Y, Z): {root_states[0, :3].cpu().numpy()}")
+        #     print(f"Quaternion (W, X, Y, Z): {root_states[0, 3:].cpu().numpy()}")
         
         # Teleport the specific robots back to start
         self.robot.write_root_pose_to_sim(root_states, env_ids=env_ids)
