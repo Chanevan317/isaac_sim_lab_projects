@@ -50,13 +50,19 @@ class IctBotEnvCfg(DirectRLEnvCfg):
         "right_wheel_joint",
     ]
     # - action scale
-    action_scale = 15.0  # [N]
+    action_scale = 5.0  # [N]
     # - reward scales
     reward_scales = {
-        "progress_reward" : 1.0,        # Reward for velocity along the X-axis 
-        "straightness_penalty" : -0.1,  # Penalty for velocity along the Y-axis (drifting)
-        "heading_penalty" : -0.05,       # Penalty for angular velocity (turning)
-        "idle_penalty" : -0.05,          # Small penalty to encourage movement
+        # Reward only POSITIVE velocity along local X-axis
+        "forward_reward": 2.0,        
+        # Penalty specifically for NEGATIVE velocity along local X-axis
+        "backward_penalty": -5.0,     
+        # Penalty for Y-velocity (drifting/sliding)
+        "straightness_penalty": -0.1,  
+        # Penalty for unnecessary spinning
+        "heading_penalty": -0.05,      
+        # Penalty for not moving
+        "idle_penalty": -0.5,
     }
     # - reset states/conditions
     y_drift_limit = 1.0       # Reset if robot drifts > 1m from center

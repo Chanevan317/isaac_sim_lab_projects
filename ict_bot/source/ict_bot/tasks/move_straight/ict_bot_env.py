@@ -13,7 +13,6 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform
 
 from .ict_bot_env_cfg import IctBotEnvCfg
 
@@ -33,6 +32,12 @@ class IctBotEnv(DirectRLEnv):
         
         self.R = self.cfg.wheel_radius
         self.L = self.cfg.wheel_spacing
+
+        # Store the desired reset pose (position and quaternion)
+        # Position: (0, 0, 0.35) - Z is 0.35 as per robot config
+        # Quaternion: (0.5, 0.5, -0.5, 0.5) - w, x, y, z format
+        self.reset_pos = torch.tensor([0.0, 0.0, 0.35], device=self.device)
+        self.reset_quat = torch.tensor([0.5, 0.5, -0.5, 0.5], device=self.device)
 
         # Initialize buffers used in dones/rewards
         self.y_drift = torch.zeros(self.num_envs, device=self.device)
@@ -122,12 +127,15 @@ class IctBotEnv(DirectRLEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
-        # Progress Reward: Encourage moving forward on X
-        progress_reward = self.forward_vel * self.cfg.reward_scales["progress_reward"]
+        # Forward Reward: Reward POSITIVE velocity along local X-axis
+        forward_reward = torch.clamp(self.forward_vel, min=0) * self.cfg.reward_scales["forward_reward"]
         
-        # Straightness Penalty: Penalize distance from the Y=0 center line
+        # Backward Penalty: Penalize NEGATIVE velocity along local X-axis
+        backward_penalty = torch.clamp(-self.forward_vel, min=0) * self.cfg.reward_scales["backward_penalty"]
+        
+        # Straightness Penalty: Penalize lateral velocity (drifting/sliding)
         # We use abs() so drifting left or right is equally bad
-        drift_penalty = torch.abs(self.y_drift) * self.cfg.reward_scales["straightness_penalty"]
+        straightness_penalty = torch.abs(self.y_drift) * self.cfg.reward_scales["straightness_penalty"]
         
         # Heading Penalty: Penalize excessive turning/spinning
         heading_penalty = torch.abs(self.yaw_rate) * self.cfg.reward_scales["heading_penalty"]
@@ -136,7 +144,7 @@ class IctBotEnv(DirectRLEnv):
         idle_penalty = (torch.abs(self.forward_vel) < 0.01) * self.cfg.reward_scales["idle_penalty"]
         
         # Total Reward
-        return progress_reward - drift_penalty - heading_penalty - idle_penalty
+        return forward_reward + backward_penalty + straightness_penalty + heading_penalty + idle_penalty
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         # Truncation: Check if the timer (episode_length_buf) reached the limit
@@ -164,28 +172,25 @@ class IctBotEnv(DirectRLEnv):
             # Ensure it is a tensor on the correct device (GPU)
             env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
 
-        # Reset Robot Root Pose (Position at 0,0,0 and Identity Rotation)
-        # We create a tensor of shape [num_resets, 7] -> [x, y, z, qw, qx, qy, qz]
         num_resets = len(env_ids)
-        root_states = self.robot.data.default_root_state[env_ids, :7].clone()
         
-        # Add environment origins
-        # root_states[:, :3] = self.scene.env_origins[env_ids]
-        root_states[:, :2] += self.scene.env_origins[env_ids, :2]
+        # Clone the complete default root state to get height
+        root_states = self.robot.data.default_root_state[env_ids].clone()
 
-        # if len(env_ids) > 0:
-        #     first_env_idx = env_ids[0].item()
-        #     print(f"\n--- Reset Debug (Env {first_env_idx}) ---")
-        #     print(f"Position (X, Y, Z): {root_states[0, :3].cpu().numpy()}")
-        #     print(f"Quaternion (W, X, Y, Z): {root_states[0, 3:].cpu().numpy()}")
         
-        # Teleport the specific robots back to start
-        self.robot.write_root_pose_to_sim(root_states, env_ids=env_ids)
+        # Set position: add environment spacing, but keep Z from default height
+        root_states[:, 0:2] = self.scene.env_origins[env_ids, 0:2]
+        
+        root_states[:, 7:13] = 0  # Reset velocities to zero
+        
+        # Write the complete root state to simulation
+        self.robot.write_root_pose_to_sim(root_states[:, 0:7], env_ids=env_ids)
+        self.robot.write_root_velocity_to_sim(root_states[:, 7:13], env_ids=env_ids)
 
-        # Reset Robot Velocities (Stop all movement)
-        # Tensor of shape [num_resets, 6] -> [vx, vy, vz, wx, wy, wz]
-        root_velocities = torch.zeros((num_resets, 6), device=self.device)
-        self.robot.write_root_velocity_to_sim(root_velocities, env_ids=env_ids)
+        self.robot.data.root_pos_w[env_ids] = root_states[:, 0:3]
+        self.robot.data.root_quat_w[env_ids] = root_states[:, 3:7]
+
+        self.robot.reset(env_ids)
 
         # Reset Wheel Joint Positions and Velocities to Zero
         num_wheels = len(self._wheel_indices)
@@ -195,10 +200,10 @@ class IctBotEnv(DirectRLEnv):
         self.robot.write_joint_state_to_sim(
             joint_pos, 
             joint_vel, 
-            joint_ids=self._wheel_indices, # Mapping [N, 2] -> [N, 5]
+            joint_ids=self._wheel_indices,
             env_ids=env_ids
         )
 
-        # Reset Internal Buffers (CRITICAL for skrl and timing)
+        # Reset Internal Buffers
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
