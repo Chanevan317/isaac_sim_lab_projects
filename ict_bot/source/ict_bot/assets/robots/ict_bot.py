@@ -34,7 +34,7 @@ ICT_BOT_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 1.0),
+        pos=(0.0, 0.0, 0.2),
         rot=(0.7071, 0.0, 0.0, 0.7071),
         joint_pos={
             "right_wheel_joint": 0.0,

@@ -14,7 +14,7 @@ from . import agents
 
 gym.register(
     id="Ict-Bot-Straight-v0",
-    entry_point=f"{__name__}.ict_bot_env:IctBotEnv",
+    entry_point=f"{__name__}.ict_bot_env:MoveStraightEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.ict_bot_env_cfg:IctBotEnvCfg",
@@ -25,10 +25,10 @@ gym.register(
 
 gym.register(
     id="Ict-Bot-Straight-Play-v0",
-    entry_point=f"{__name__}.ict_bot_env:IctBotEnv",
+    entry_point=f"{__name__}.ict_bot_env:MoveStraightEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.ict_bot_env_cfg:IctBotEnvCfg_Play",
+        "env_cfg_entry_point": f"{__name__}.ict_bot_env_cfg:IctBotEnvCfg_PLAY",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
     }
 )
