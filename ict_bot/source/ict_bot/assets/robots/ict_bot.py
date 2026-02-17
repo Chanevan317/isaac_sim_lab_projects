@@ -18,6 +18,7 @@ USD_PATH = os.path.join(ROOT_DIR, "ict_bot.usd")
 ICT_BOT_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=USD_PATH,
+        activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             rigid_body_enabled=True,
             max_linear_velocity=0.5,
@@ -44,8 +45,8 @@ ICT_BOT_CFG = ArticulationCfg(
     actuators={
         "wheels": ImplicitActuatorCfg(
             joint_names_expr=["right_wheel_joint", "left_wheel_joint"],
-            effort_limit=10000.0,
-            velocity_limit=5.0,
+            effort_limit_sim=10000.0,
+            velocity_limit_sim=5.0,
             stiffness=0.0,
             damping=100000.0,
         ),
