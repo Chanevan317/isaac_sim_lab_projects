@@ -21,7 +21,7 @@ class IctBotObsEnvCfg(ObstacleAvoidanceEnvCfg):
 
     # Action/Observation/State spaces
     action_space = 2        # [linear_vel, angular_vel]
-    observation_space = 457  # [Base(13) + Target_Rel_Pos(3) + Raycaster(441)] = 457
+    observation_space = 316  # [Base(13) + Target_Rel_Pos(3) + Raycaster(441)] = 457
     state_space = 0
     
     # Physical properties

@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
 from ict_bot.tasks.move_straight.ict_bot_env import MoveStraightSceneCfg
-from isaaclab.sensors import RayCasterCfg, patterns, ContactSensorCfg
+from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns, ContactSensorCfg
 import isaaclab.sim as sim_utils
 
 import os
@@ -22,6 +22,7 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 import ict_bot.tasks.obstacle_avoidance.mdp as mdp
 from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
+from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs.mdp import root_pos_w, root_quat_w
@@ -46,7 +47,7 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
 
     # obstacle avoidance scene assets
     obstacles = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Obstacles",
+        prim_path="{ENV_REGEX_NS}/obstacles",
         spawn=sim_utils.UsdFileCfg(
             usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "obstacle_avoidance_scene.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -55,14 +56,34 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
     )
 
     # Raycaster configuration for obstacle avoidance
-    raycaster = RayCasterCfg(
+    raycaster = MultiMeshRayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.18)),
-        # attach_to_parent=True,
-        # Pattern for obstacle avoidance (e.g., a fan or grid)
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=(2.0, 2.0)),
-        mesh_prim_paths=["/World/ground"], # Rays check for hits against your USD
-        debug_vis=True, # Recommended to visualize rays during setup
+        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.18)),
+        
+        # This list must use the RaycastTargetCfg class defined in your source
+        mesh_prim_paths=[
+            MultiMeshRayCasterCfg.RaycastTargetCfg(
+                # 1. Point to ENV 0 ONLY to avoid the 264-count explosion
+                prim_expr="{ENV_REGEX_NS}/obstacles/.*", 
+                
+                # 2. Re-use this one environment's mesh for all other robots
+                is_shared=True, 
+                
+                # 3. Merge the 10 cubes and 10 cylinders into one baked object
+                merge_prim_meshes=True, 
+                
+                # 4. Save memory by not tracking static wall movement
+                track_mesh_transforms=False
+            )
+        ],
+        pattern_cfg=patterns.LidarPatternCfg(
+            channels=1, 
+            vertical_fov_range=(0.0, 0.0), 
+            horizontal_fov_range=(0.0, 360.0), 
+            horizontal_res=1.2 
+        ),
+        max_distance=8.0,
+        debug_vis=True,
     )
 
     target = RigidObjectCfg(
@@ -143,24 +164,51 @@ class RewardsCfg:
     # Reaching the target (Distance-based)
     reaching_target = RewTerm(
         func=mdp.reaching_target_reward, # Add to your mdp.py
-        weight=5.0,
+        weight=10.0,
+        params={"target_cfg": SceneEntityCfg("target")}
+    )
+
+    # Progress (The "Scent": Reward for moving toward the cone)
+    progress_toward_target = RewTerm(
+        func=mdp.progress_reward, 
+        weight=2.0,
         params={"target_cfg": SceneEntityCfg("target")}
     )
 
     # Obstacle Avoidance (Penalty for being too close to meshes)
     obstacle_penalty = RewTerm(
-        func=mdp.obstacle_avoidance_penalty, # Add to your mdp.py
-        weight=-10.0,
+        func=mdp.obstacle_avoidance_penalty,
+        weight=-5.0,
         params={"sensor_cfg": SceneEntityCfg("raycaster"), "threshold": 0.2}
     )
 
-    # straightness_penalty = RewTerm(func=mdp.straightness_penalty, weight=-1.0)
-    idle_penalty = RewTerm(func=mdp.idle_penalty, weight=-0.5)
+    # Smoothness (Penalize jittery steering)
+    action_rate_penalty = RewTerm(
+        func=mdp.action_rate_l2,
+        weight=-0.01
+    )
 
 
 @configclass
 class MyEventCfg:
-    # This term triggers on "reset" for the specific env_ids being reset
+    
+    reset_robot_base = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "pose_range": {
+                "x": (0.0, 0.0), 
+                "y": (0.0, 0.0), 
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (-3.14, 3.14)  # Random heading (Full 360 degrees)
+            },
+            "velocity_range": {}, # Sets all velocities to 0
+        },
+    )
+
     reset_target_position = EventTerm(
         func=mdp.reset_target_in_ring,
         mode="reset",

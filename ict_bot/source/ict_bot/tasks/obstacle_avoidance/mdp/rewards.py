@@ -18,6 +18,29 @@ def reaching_target_reward(env: ManagerBasedRLEnv, target_cfg: SceneEntityCfg):
     distance = torch.norm(cone_pos - robot_pos, dim=-1)
     return 1.0 / (1.0 + distance) # Inverse distance reward
 
+
+def progress_reward(env: ManagerBasedRLEnv, target_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Reward for moving towards the target (velocity projection)."""
+    # 1. Get the direction vector from robot to target (World Frame)
+    robot_pos = env.scene["robot"].data.root_pos_w[:, :2]
+    target_pos = env.scene[target_cfg.name].data.root_pos_w[:, :2]
+    to_target = target_pos - robot_pos
+    
+    # 2. Normalize the vector to get the 'heading' to the target
+    to_target_dir = torch.nn.functional.normalize(to_target, dim=-1)
+    
+    # 3. Get the robot's current linear velocity in World Frame
+    # (Using only X and Y since the cone is on the ground)
+    vel_w = env.scene["robot"].data.root_lin_vel_w[:, :2]
+    
+    # 4. Calculate the Dot Product: (Velocity) ⋅ (Direction to Target)
+    # This gives a positive value if moving towards, negative if moving away
+    progress = torch.sum(vel_w * to_target_dir, dim=-1)
+    
+    # Optional: Clip the reward so it doesn't become too massive during high-speed resets
+    return torch.clamp(progress, min=-1.0, max=1.0)
+
+
 def obstacle_avoidance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float):
     """Penalize the robot if ANY ray detects an obstacle closer than the threshold."""
     # 1. Get the distances we calculated earlier (Shape: [128, 441])
@@ -34,14 +57,3 @@ def obstacle_avoidance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCf
     # Now it returns shape (128,), which matches 'tensor a'
     return penalty
 
-
-# def straightness_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-#     """Penalize Y-axis velocity (lateral motion in world frame)."""
-#     vel_y = env.scene["robot"].data.root_lin_vel_w[:, 1]
-#     return torch.abs(vel_y)
-
-
-def idle_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Penalize if robot is not moving forward (low X velocity)."""
-    vel_x = env.scene["robot"].data.root_lin_vel_w[:, 0]
-    return (torch.abs(vel_x) < 0.01).float()
