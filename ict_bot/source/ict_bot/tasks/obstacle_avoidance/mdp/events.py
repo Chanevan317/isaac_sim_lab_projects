@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from isaaclab.assets import RigidObject
     from isaaclab.managers import SceneEntityCfg
 
+
 def reset_target_in_ring(env, env_ids, asset_cfg: SceneEntityCfg, radius_range: float | tuple, z_height: float):
     asset: RigidObject = env.scene[asset_cfg.name]
     num_resets = len(env_ids)

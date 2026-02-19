@@ -9,31 +9,29 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.managers import SceneEntityCfg
     from isaaclab.assets import RigidObject
+    from isaaclab.sensors import RayCaster
 
 
 def get_raycast_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Calculates the scalar distance for each ray in the raycaster."""
-    # # 1. Access the sensor instance from the scene
-    # # Note: Access via env.scene.sensors if it's a sensor group
-    # sensor: RayCaster = env.scene[sensor_cfg.name]
+    # 1. Access the sensor instance from the scene
+    # Note: Access via env.scene.sensors if it's a sensor group
+    sensor: RayCaster = env.scene[sensor_cfg.name]
     
-    # # 2. Get the hit positions in World Frame [num_envs, num_rays, 3]
-    # hit_pos_w = sensor.data.ray_hits_w
+    # 2. Get the hit positions in World Frame [num_envs, num_rays, 3]
+    hit_pos_w = sensor.data.ray_hits_w
     
-    # # 3. Get the sensor's own position in World Frame [num_envs, 3]
-    # sensor_pos_w = sensor.data.pos_w
+    # 3. Get the sensor's own position in World Frame [num_envs, 3]
+    sensor_pos_w = sensor.data.pos_w
     
-    # # 4. Calculate Euclidean distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
-    # # We unsqueeze sensor_pos_w to [num_envs, 1, 3] to broadcast across all rays
-    # distances = torch.norm(hit_pos_w - sensor_pos_w.unsqueeze(1), dim=-1)
+    # 4. Calculate Euclidean distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
+    # We unsqueeze sensor_pos_w to [num_envs, 1, 3] to broadcast across all rays
+    distances = torch.norm(hit_pos_w - sensor_pos_w.unsqueeze(1), dim=-1)
     
-    # # 5. Optional: Clip the distance to the max range defined in your config
-    # # This prevents 'infinity' values if a ray hits nothing
-    # max_range = sensor.cfg.max_distance
-    # return torch.clamp(distances, max=max_range)
-
-    sensor = env.scene.sensors[sensor_cfg.name]
-    return sensor.data.distances
+    # 5. Optional: Clip the distance to the max range defined in your config
+    # This prevents 'infinity' values if a ray hits nothing
+    max_range = sensor.cfg.max_distance
+    return torch.clamp(distances, max=max_range)
 
 
 def get_relative_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg) -> torch.Tensor:

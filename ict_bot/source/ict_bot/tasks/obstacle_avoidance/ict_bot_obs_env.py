@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
 from ict_bot.tasks.move_straight.ict_bot_env import MoveStraightSceneCfg
-from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns, ContactSensorCfg
+from isaaclab.sensors import MultiMeshRayCasterCfg, patterns
 import isaaclab.sim as sim_utils
 
 import os
@@ -22,7 +22,6 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 import ict_bot.tasks.obstacle_avoidance.mdp as mdp
 from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
-from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs.mdp import root_pos_w, root_quat_w
@@ -58,21 +57,13 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
     # Raycaster configuration for obstacle avoidance
     raycaster = MultiMeshRayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base",
-        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.18)),
+        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.2)),
         
-        # This list must use the RaycastTargetCfg class defined in your source
         mesh_prim_paths=[
             MultiMeshRayCasterCfg.RaycastTargetCfg(
-                # 1. Point to ENV 0 ONLY to avoid the 264-count explosion
-                prim_expr="{ENV_REGEX_NS}/obstacles/.*", 
-                
-                # 2. Re-use this one environment's mesh for all other robots
+                prim_expr="{ENV_REGEX_NS}/obstacles", 
                 is_shared=True, 
-                
-                # 3. Merge the 10 cubes and 10 cylinders into one baked object
                 merge_prim_meshes=True, 
-                
-                # 4. Save memory by not tracking static wall movement
                 track_mesh_transforms=False
             )
         ],
@@ -82,7 +73,7 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
             horizontal_fov_range=(0.0, 360.0), 
             horizontal_res=1.2 
         ),
-        max_distance=8.0,
+        max_distance=4.0,
         debug_vis=True,
     )
 
@@ -97,14 +88,6 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.5)),
     )
-
-    contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/.*", 
-        update_period=0.0,
-        history_length=3,
-        debug_vis=True,
-    )
-
 
 ##
 # MDP settings
@@ -161,32 +144,34 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Reaching the target (Distance-based)
+    # Primary Goal: Sparse but massive reward for completion
     reaching_target = RewTerm(
-        func=mdp.reaching_target_reward, # Add to your mdp.py
-        weight=10.0,
+        func=mdp.reaching_target_reward,
+        weight=50.0,  # Increased from 25.0
         params={"target_cfg": SceneEntityCfg("target")}
     )
 
-    # Progress (The "Scent": Reward for moving toward the cone)
+    # The "Scent": Dense reward for moving in the right direction
     progress_toward_target = RewTerm(
         func=mdp.progress_reward, 
-        weight=2.0,
+        weight=15.0,  # Increased from 10.0 to overcome penalties
         params={"target_cfg": SceneEntityCfg("target")}
     )
 
-    # Obstacle Avoidance (Penalty for being too close to meshes)
+    # Proximity Penalty: Use a gradient instead of a binary trigger
+    # Tip: In your mdp.py, ensure this returns (threshold - distance) 
+    # so the penalty grows as the robot gets closer.
     obstacle_penalty = RewTerm(
         func=mdp.obstacle_avoidance_penalty,
-        weight=-5.0,
-        params={"sensor_cfg": SceneEntityCfg("raycaster"), "threshold": 0.2}
+        weight=-7.5,
+        params={"sensor_cfg": SceneEntityCfg("raycaster"), "threshold": 3.5} # Wider threshold
     )
 
-    # Smoothness (Penalize jittery steering)
-    action_rate_penalty = RewTerm(
-        func=mdp.action_rate_l2,
-        weight=-0.01
-    )
+    # Survival: Encourage speed but keep it low enough to not cause 'suicide' runs
+    is_alive_penalty = RewTerm(func=mdp.is_alive, weight=-0.2) 
+
+    # Smoothness: Keep this low so it doesn't prevent movement entirely
+    action_rate_penalty = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
 
 
 @configclass
@@ -200,10 +185,11 @@ class MyEventCfg:
             "pose_range": {
                 "x": (0.0, 0.0), 
                 "y": (0.0, 0.0), 
-                "z": (0.0, 0.0),
+                "z": (0.2, 0.2),
                 "roll": (0.0, 0.0),
                 "pitch": (0.0, 0.0),
-                "yaw": (-3.14, 3.14)  # Random heading (Full 360 degrees)
+                # "yaw": (-3.14, 3.14)  # Random heading (Full 360 degrees)
+                "yaw": (0.0, 0.0)
             },
             "velocity_range": {}, # Sets all velocities to 0
         },
@@ -214,8 +200,8 @@ class MyEventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("target"),
-            "radius_range": (2.5, 3.0), # 2.5m to 3.0m distance
-            "z_height": 0.25            # Exactly half the cone height
+            "radius_range": (2.5, 2.6), # 2.5m to 2.6m distance
+            "z_height": 0.6            # Exactly half the cone height
         },
     )
 
@@ -224,23 +210,16 @@ class MyEventCfg:
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
-    time_out = DoneTerm(func=mdp.time_out, time_out=True)
-
-    # Terminate if the robot hits something in the USD scene
-    # This uses the 'net_contact_forces' on the robot's links
-    illegal_contact = DoneTerm(
-        func=mdp.illegal_contact,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces"),
-            "threshold": 20.0, # Newtons - adjust based on your robot's scale and expected forces
-        }
+    time_out = DoneTerm(
+        func=mdp.time_out, 
+        time_out=True
     )
 
     # Terminate if the robot reaches the target (Success Reset)
     # This speeds up training so the robot learns to find a *new* target immediately
     target_reached = DoneTerm(
         func=mdp.target_reached,
-        params={"asset_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.2}
+        params={"asset_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.0}
     )
 
 
