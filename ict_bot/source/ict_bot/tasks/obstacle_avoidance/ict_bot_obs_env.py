@@ -24,13 +24,13 @@ from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.envs.mdp import root_pos_w, root_quat_w
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
+
 
 ##
 # Scene definition
@@ -40,54 +40,62 @@ from isaaclab.utils import configclass
 @configclass
 class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
     """Configuration for the scene."""
-
+    
     def __post_init__(self):
         super().__post_init__()
 
     # obstacle avoidance scene assets
-    obstacles = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/obstacles",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "obstacle_avoidance_scene.usd"),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-        ),
-    )
+    # obstacles = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/obstacles",
+    #     spawn=sim_utils.UsdFileCfg(
+    #         usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "obstacle_avoidance_scene.usd"),
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #     ),
+    # )
 
-    # Raycaster configuration for obstacle avoidance
-    raycaster = MultiMeshRayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base",
-        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.2)),
-        
-        mesh_prim_paths=[
-            MultiMeshRayCasterCfg.RaycastTargetCfg(
-                prim_expr="{ENV_REGEX_NS}/obstacles", 
-                is_shared=True, 
-                merge_prim_meshes=True, 
-                track_mesh_transforms=False
-            )
-        ],
-        pattern_cfg=patterns.LidarPatternCfg(
-            channels=1, 
-            vertical_fov_range=(0.0, 0.0), 
-            horizontal_fov_range=(0.0, 360.0), 
-            horizontal_res=1.2 
-        ),
-        max_distance=4.0,
-        debug_vis=True,
-    )
+    # # Raycaster configuration for obstacle avoidance
+    # raycaster = MultiMeshRayCasterCfg(
+    #     prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base",
+    #     offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.2)),
+    #     mesh_prim_paths=[
+    #         MultiMeshRayCasterCfg.RaycastTargetCfg(
+    #             prim_expr="{ENV_REGEX_NS}/obstacles", 
+    #             is_shared=True, 
+    #             merge_prim_meshes=True, 
+    #             track_mesh_transforms=False
+    #         )
+    #     ],
+    #     pattern_cfg=patterns.LidarPatternCfg(
+    #         channels=1, 
+    #         vertical_fov_range=(0.0, 0.0), 
+    #         horizontal_fov_range=(0.0, 360.0), 
+    #         horizontal_res=1.2 
+    #     ),
+    #     max_distance=4.0,
+    #     debug_vis=True,
+    # )
 
+    # Target cone configuration
     target = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Target_cone",
         spawn=sim_utils.ConeCfg(
-            radius=0.2,
+            radius=0.15,
             height=0.5,
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False, # Keeps it on the floor
+                max_depenetration_velocity=1.0,
+            ),
+            # This allows it to hit the floor but we can ignore it in the robot's logic
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+            ),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.5)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.15)),
     )
+
+
 
 ##
 # MDP settings
@@ -101,36 +109,49 @@ class ActionsCfg:
     wheel_action: JointVelocityActionCfg = JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["right_wheel_joint", "left_wheel_joint"],
-        scale=10.0,
+        scale=6.0,
     )
+
 
 @configclass
 class ObservationsCfg:
     """Observation specifications for the MDP."""
 
+
     @configclass
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
-
-        # observation terms
-        root_pos_w = ObsTerm(func=root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        root_quat_w = ObsTerm(func=root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
         
-        # Distance to the Target target (Relative position)
-        target_relative_pos = ObsTerm(
-            func=mdp.get_relative_pos,
-            params={
-                "asset_cfg": SceneEntityCfg("robot"),
-                "target_cfg": SceneEntityCfg("target")
-            }
+        # Lidar/Raycast Data (Obstacle awareness)
+        # Pulls the raw distance data from the raycaster sensor defined in the scene
+        # lidar_distances = ObsTerm(
+        #     func=mdp.ray_distances,
+        #     params={"sensor_cfg": SceneEntityCfg("raycaster"), "num_rays": 300, "max_distance": 4.0}
+        # )
+
+        # Relative Target Position (Local Frame)
+        # Computes the vector from robot to target in the robot's local coordinate system
+        rel_pos_to_target = ObsTerm(
+            func=mdp.rel_target_pos,
+            scale=0.33, # Scale down to keep values in a reasonable range (max ~3m -> 1.0)
+            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
         )
 
-        # Raycaster Hits (Obstacle distances)
-        # This returns the distances measured by your 2x2m grid
-        lidar_scan = ObsTerm(
-            func=mdp.get_raycast_distances,
-            params={"sensor_cfg": SceneEntityCfg("raycaster")}
-        )
+        # Base Linear and Angular Velocity
+        # Tells the robot how fast it is currently moving
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+
+        # Heading Error
+        # The orientation difference between current heading and target direction
+        # heading_to_target = ObsTerm(
+        #     func=mdp.heading_error,
+        #     params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+        # )
+
+        # Previous Action
+        # Useful for smoothing and understanding current momentum
+        previous_action = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -144,34 +165,60 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Primary Goal: Sparse but massive reward for completion
-    reaching_target = RewTerm(
-        func=mdp.reaching_target_reward,
-        weight=50.0,  # Increased from 25.0
-        params={"target_cfg": SceneEntityCfg("target")}
+    # Progress Reward (Potential)
+    # Scaled high to encourage movement
+    progress = RewTerm(
+        func=mdp.progress_reward,
+        weight=3000.0,
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
     )
 
-    # The "Scent": Dense reward for moving in the right direction
-    progress_toward_target = RewTerm(
-        func=mdp.progress_reward, 
-        weight=15.0,  # Increased from 10.0 to overcome penalties
-        params={"target_cfg": SceneEntityCfg("target")}
+    face_target = RewTerm(
+        func=mdp.reward_turning_priority,
+        weight=20.0, 
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
     )
 
-    # Proximity Penalty: Use a gradient instead of a binary trigger
-    # Tip: In your mdp.py, ensure this returns (threshold - distance) 
-    # so the penalty grows as the robot gets closer.
-    obstacle_penalty = RewTerm(
-        func=mdp.obstacle_avoidance_penalty,
-        weight=-7.5,
-        params={"sensor_cfg": SceneEntityCfg("raycaster"), "threshold": 3.5} # Wider threshold
+    # Heading Reward
+    # Encourages facing the target. Uses the error function we defined for observations.
+    # heading_alignment = RewTerm(
+    #     func=mdp.heading_reward,
+    #     weight=5.0,
+    #     params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")},
+    # )
+
+    # Target Reach Bonus (Sparse)
+    # Triggered by the same logic as the success termination
+    target_reach_bonus = RewTerm(
+        func=mdp.target_reached,
+        weight=100.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"), 
+            "target_cfg": SceneEntityCfg("target"), 
+            "distance": 0.2
+        }
     )
 
-    # Survival: Encourage speed but keep it low enough to not cause 'suicide' runs
-    is_alive_penalty = RewTerm(func=mdp.is_alive, weight=-0.2) 
+    # Proximity Penalty (Soft buffer)
+    # Encourages staying at least 0.25m away from obstacles
+    # obstacle_proximity = RewTerm(
+    #     func=mdp.proximity_penalty,
+    #     weight=-2.0,
+    #     params={"sensor_cfg": SceneEntityCfg("raycaster"), "threshold": 0.25}
+    # )
 
-    # Smoothness: Keep this low so it doesn't prevent movement entirely
-    action_rate_penalty = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+    # Action Smoothing
+    # Penalizes sudden changes in wheel velocities (jitter)
+    # action_rate = RewTerm(
+    #     func=mdp.action_rate_l2,
+    #     weight=-0.01
+    # )
+
+
+    # alive_penalty = RewTerm(
+    #     func=mdp.is_alive,
+    #     weight=-0.1
+    # )
 
 
 @configclass
@@ -188,8 +235,8 @@ class MyEventCfg:
                 "z": (0.2, 0.2),
                 "roll": (0.0, 0.0),
                 "pitch": (0.0, 0.0),
-                # "yaw": (-3.14, 3.14)  # Random heading (Full 360 degrees)
-                "yaw": (0.0, 0.0)
+                "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
+                "yaw": (0.0, 0.0),
             },
             "velocity_range": {}, # Sets all velocities to 0
         },
@@ -219,7 +266,7 @@ class TerminationsCfg:
     # This speeds up training so the robot learns to find a *new* target immediately
     target_reached = DoneTerm(
         func=mdp.target_reached,
-        params={"asset_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.0}
+        params={"asset_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.2}
     )
 
 

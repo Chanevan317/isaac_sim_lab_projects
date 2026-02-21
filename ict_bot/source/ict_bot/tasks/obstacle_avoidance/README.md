@@ -1,3 +1,3 @@
-# Task name: MOVE STRAIGHT
+# Task name: OBSTACLE AVOIDANCE
 
-In this task, the robot is learning how to move forward along the x axis.
+In this task, the robot is learning how to avoid obstacles and reach the target.

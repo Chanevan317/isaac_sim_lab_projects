@@ -3,49 +3,61 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-import isaaclab.utils.math as math_utils
+from isaaclab.utils.math import quat_inv, quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.managers import SceneEntityCfg
-    from isaaclab.assets import RigidObject
-    from isaaclab.sensors import RayCaster
 
 
-def get_raycast_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Calculates the scalar distance for each ray in the raycaster."""
-    # 1. Access the sensor instance from the scene
-    # Note: Access via env.scene.sensors if it's a sensor group
-    sensor: RayCaster = env.scene[sensor_cfg.name]
+def rel_target_pos(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    robot = env.scene[robot_cfg.name]
+    target = env.scene[target_cfg.name]
     
-    # 2. Get the hit positions in World Frame [num_envs, num_rays, 3]
-    hit_pos_w = sensor.data.ray_hits_w
+    # Vector from robot to target in world frame
+    pos_rel_w = target.data.root_pos_w - robot.data.root_pos_w
     
-    # 3. Get the sensor's own position in World Frame [num_envs, 3]
-    sensor_pos_w = sensor.data.pos_w
+    # Invert the robot's orientation to get the "local" transform
+    # quat_inv is standard in 2.3.2
+    robot_quat_inv = quat_inv(robot.data.root_quat_w)
     
-    # 4. Calculate Euclidean distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
-    # We unsqueeze sensor_pos_w to [num_envs, 1, 3] to broadcast across all rays
-    distances = torch.norm(hit_pos_w - sensor_pos_w.unsqueeze(1), dim=-1)
-    
-    # 5. Optional: Clip the distance to the max range defined in your config
-    # This prevents 'infinity' values if a ray hits nothing
-    max_range = sensor.cfg.max_distance
-    return torch.clamp(distances, max=max_range)
+    # Rotate the relative vector by the inverse quaternion
+    return quat_apply(robot_quat_inv, pos_rel_w)
 
 
-def get_relative_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Calculates the position of the target relative to the robot's body frame."""
-    # Get world positions
-    robot: RigidObject = env.scene[asset_cfg.name]
-    target: RigidObject = env.scene[target_cfg.name]
+def heading_error(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    # Get the local relative position
+    local_pos = rel_target_pos(env, robot_cfg, target_cfg)
+    # Angle to target in local XY plane
+    return torch.atan2(local_pos[:, 1], local_pos[:, 0]).unsqueeze(-1)
+
+
+def ray_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, num_rays: int = 300, max_distance: float = 4.0):
+    """Returns the ray distances clipped and normalized by a specific range."""
+    # Access the MultiMeshRayCaster sensor
+    raycaster = env.scene[sensor_cfg.name]
     
-    # Position of target relative to robot in World Frame
-    relative_pos_w = target.data.root_pos_w - robot.data.root_pos_w
+    # 1. Get Hit Positions in World Frame (N, B, 3)
+    # If your version uses 'ray_hits_w', use that. 
+    # Most Isaac Lab versions store it in 'pos_w'
+    hit_positions = raycaster.data.ray_hits_w
     
-    # Rotate the relative position into the Robot's Local Frame
-    # (Uses the inverse of the robot's world orientation)
-    robot_quat_w = robot.data.root_quat_w
-    relative_pos_b = math_utils.quat_apply_inverse(robot_quat_w, relative_pos_w)
+    # 2. Get Sensor Position in World Frame (N, 3)
+    sensor_pos = raycaster.data.pos_w.unsqueeze(1) # Shape (N, 1, 3)
     
-    return relative_pos_b
+    # 3. Calculate Euclidean Distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
+    # Shape: (num_envs, num_rays)
+    distances = torch.norm(hit_positions - sensor_pos, dim=-1)
+    
+    # 4. Handle Ray Slicing/Padding
+    curr_rays = distances.shape[1]
+    if curr_rays > num_rays:
+        distances = distances[:, :num_rays]
+    elif curr_rays < num_rays:
+        padding = torch.full((distances.shape[0], num_rays - curr_rays), max_distance, device=env.device)
+        distances = torch.cat([distances, padding], dim=1)
+    
+    # 5. Clip and Normalize (0.0 to 1.0)
+    clamped_distances = torch.clamp(distances, max=max_distance) / max_distance
+    
+    return clamped_distances

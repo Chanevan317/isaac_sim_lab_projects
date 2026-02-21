@@ -3,107 +3,111 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-
-from ict_bot.tasks.obstacle_avoidance import mdp
-from isaaclab.utils.math import quat_apply
+from warp import quat_rotate_inv
+from ict_bot.tasks.obstacle_avoidance.mdp.observations import ray_distances, heading_error
+from isaaclab.utils.math import quat_inv, quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.managers import SceneEntityCfg
 
 
-def reaching_target_reward(env: ManagerBasedRLEnv, target_cfg: SceneEntityCfg):
-    # Distance between robot and cone
-    robot_pos = env.scene["robot"].data.root_pos_w
-    cone_pos = env.scene[target_cfg.name].data.root_pos_w
-    distance = torch.norm(cone_pos - robot_pos, dim=-1)
-    return 1.0 / (1.0 + distance) # Inverse distance reward
+def progress_reward(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    """Reward based on moving closer to the target compared to the previous step."""
+    robot = env.scene[robot_cfg.name]
+    target = env.scene[target_cfg.name]
+    
+    # Current distance
+    current_dist = torch.norm(target.data.root_pos_w - robot.data.root_pos_w, dim=-1)
+    
+    # Initialize previous distance if not exists
+    if not hasattr(env, "prev_tgt_dist"):
+        env.prev_tgt_dist = current_dist.clone()
+    
+    # 3. Calculate the delta (previous - current)
+    # Positive if getting closer, Negative if moving away
+    dist_delta = env.prev_tgt_dist - current_dist
+    
+    # 4. Update the stored distance for the next step
+    # We use .clone() to ensure we don't just point to the same tensor
+    env.prev_tgt_dist = current_dist.clone()
+
+    # 2. Get Heading Alignment (Cosine of error)
+    # 1.0 = Facing target, -1.0 = Facing away
+    error_rad = heading_error(env, robot_cfg, target_cfg).squeeze(-1)
+    alignment = torch.cos(error_rad)
+
+    # 3. ASYMMETRIC LOGIC:
+    # If getting closer (dist_delta > 0) AND facing target (alignment > 0.7): reward
+    # If getting closer but facing WRONG way: heavy penalty
+    # This kills the 'backwards' and 'drifting' strategies immediately.
+    gate = (alignment > 0.95).float()
+    
+    return gate * dist_delta
 
 
-def progress_reward(env: ManagerBasedRLEnv, target_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Reward for moving towards the target (velocity projection)."""
-    # # 1. Get the direction vector from robot to target (World Frame)
-    # robot_pos = env.scene["robot"].data.root_pos_w[:, :2]
-    # target_pos = env.scene[target_cfg.name].data.root_pos_w[:, :2]
-    # to_target = target_pos - robot_pos
+def reward_turning_priority(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    robot = env.scene[robot_cfg.name]
+    error_rad = heading_error(env, robot_cfg, target_cfg).squeeze(-1)
+    alignment = torch.cos(error_rad)
     
-    # # 2. Normalize the vector to get the 'heading' to the target
-    # to_target_dir = torch.nn.functional.normalize(to_target, dim=-1)
+    # Get linear velocity (forward speed)
+    lin_vel = torch.norm(robot.data.root_lin_vel_b[:, :2], dim=-1)
     
-    # # 3. Get the robot's current linear velocity in World Frame
-    # # (Using only X and Y since the cone is on the ground)
-    # vel_w = env.scene["robot"].data.root_lin_vel_w[:, :2]
-    
-    # # 4. Calculate the Dot Product: (Velocity) ⋅ (Direction to Target)
-    # # This gives a positive value if moving towards, negative if moving away
-    # progress = torch.sum(vel_w * to_target_dir, dim=-1)
-    
-    # # Optional: Clip the reward so it doesn't become too massive during high-speed resets
-    # return torch.clamp(progress, min=-1.0, max=1.0)
-
-    # 1. Get Direction to Target (World XY)
-    robot_pos = env.scene["robot"].data.root_pos_w[:, :2]
-    target_pos = env.scene[target_cfg.name].data.root_pos_w[:, :2]
-    to_target = target_pos - robot_pos
-    to_target_dir = torch.nn.functional.normalize(to_target, dim=-1)
-    
-    # 2. Get Robot's Forward Vector (Local +X rotated to World)
-    root_quat = env.scene["robot"].data.root_quat_w
-    # NOTE: If your robot still considers 'back' as 'front', 
-    # change [1.0, 0.0, 0.0] to [-1.0, 0.0, 0.0] below.
-    forward_vec_template = torch.tensor([1.0, 0.0, 0.0], device=env.device).repeat(root_quat.shape[0], 1)
-    forward_vec_w = quat_apply(root_quat, forward_vec_template)[:, :2]
-    forward_vec_w = torch.nn.functional.normalize(forward_vec_w, dim=-1)
-
-    # 3. Calculate Heading Alignment (Cosine Similarity)
-    # 1.0 = Facing target, -1.0 = Back to target
-    heading_alignment = torch.sum(forward_vec_w * to_target_dir, dim=-1)
-
-    # 4. Get Velocity Projection (Original Progress)
-    vel_w = env.scene["robot"].data.root_lin_vel_w[:, :2]
-    progress = torch.sum(vel_w * to_target_dir, dim=-1)
-    
-    # 5. MASKED REWARD: Only give progress if heading_alignment > 0 (Facing mostly toward)
-    # This prevents the 'Driving Backward' strategy.
-    facing_mask = (heading_alignment > 0.5).float() # Must be within ~60 degrees of target
-    
-    # Alternatively: Multiply progress by alignment so it scales
-    # combined_reward = progress * torch.clamp(heading_alignment, min=0.0)
-    
-    final_reward = progress * facing_mask
-    
-    return torch.clamp(final_reward, min=-1.0, max=1.0)
-
-def progress_reward_conditional(env, target_cfg):
-    # Calculate Heading Alignment (Cosine Similarity)
-    # alignment = 1.0 (perfectly facing), -1.0 (back to target)
-    alignment = mdp.heading_to_target_reward(env, target_cfg)
-    
-    # Calculate Raw Velocity toward target
-    vel_w = env.scene["robot"].data.root_lin_vel_w[:, :2]
-    to_target_dir = mdp.get_direction_to_target(env, target_cfg)
-    progress = torch.sum(vel_w * to_target_dir, dim=-1)
-    
-    # Only reward progress if alignment > 0.7 (~45 degrees)
-    facing_mask = (alignment > 0.7).float()
-    
-    return progress * facing_mask
+    # High reward for alignment ONLY if speed is low
+    # This specifically rewards "Stop and Turn"
+    return alignment * torch.exp(-lin_vel * 2.0) 
 
 
-
-def obstacle_avoidance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float):
-    """Penalize the robot if ANY ray detects an obstacle closer than the threshold."""
-    distances = mdp.get_raycast_distances(env, sensor_cfg)
+def heading_reward(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    """Reward for facing the target. Returns 1.0 when perfectly aligned, 0.0 at 90 deg."""
+    # # 1. Get the local position of the target relative to the robot
+    # robot = env.scene[robot_cfg.name]
+    # target = env.scene[target_cfg.name]
     
-    # Calculate how much the robot has "violated" the threshold
-    # 0.0 if safe, >0.0 if inside the threshold
-    # violation = torch.clamp(threshold - distances, min=0.0)
+    # pos_rel_w = target.data.root_pos_w - robot.data.root_pos_w
+    # local_pos_quat_inv = quat_inv(robot.data.root_quat_w)
+    # local_pos = quat_apply(local_pos_quat_inv, pos_rel_w)
     
-    # Use the max violation (the single closest point) or mean of all violating rays
-    # This creates a "gradient" the robot can follow to move away
-    # return torch.max(violation, dim=1)[0] 
-
-    penalty = torch.exp(-distances / (threshold / 2.0))
+    # # 2. Calculate the angle in the XY plane
+    # angle_to_target = torch.atan2(local_pos[:, 1], local_pos[:, 0])
     
-    return torch.mean(penalty, dim=1)
+    # # 3. Use Cosine to turn the angle into a [1, -1] reward signal
+    # # Perfect alignment (0 rad) = 1.0 reward
+    # return torch.cos(angle_to_target)
+    """Reward for facing the target. Crucial for steering."""
+    # Uses the heading error logic we built (returns radians)
+    error = heading_error(env, robot_cfg, target_cfg).squeeze(-1)
+    # Cosine maps 0 rad to 1.0, and 3.14 rad to -1.0
+    return torch.cos(error)
 
+
+def proximity_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float = 0.2):
+    """Penalize the robot for being too close to any obstacle detected by Lidar."""
+    # Get normalized distances (0.0 to 1.0, where 1.0 = 0.3m)
+    norm_distances = ray_distances(env, sensor_cfg)
+    
+    # Convert normalized back to meters for the threshold check
+    # min_dist_m will be between 0.0m and 0.3m
+    min_dist_m = torch.min(norm_distances, dim=-1)[0] * 0.3
+    
+    # Apply penalty if the closest hit is within the threshold (e.g., 0.2m)
+    # This gives a linear penalty that scales to -1.0 as the robot touches the object
+    penalty = torch.where(
+        min_dist_m < threshold, 
+        -1.0 * (threshold - min_dist_m) / threshold, 
+        torch.zeros_like(min_dist_m)
+    )
+    
+    return penalty
+
+
+def target_reached(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg, distance: float):
+    robot = env.scene[asset_cfg.name]
+    target = env.scene[target_cfg.name]
+
+    # Calculate Euclidean distance
+    tgt_dist = torch.norm(target.data.root_pos_w - robot.data.root_pos_w, dim=-1)
+    
+    # RETURN TYPE FIX: Must be boolean for self._terminated_buf
+    return tgt_dist <= distance 
