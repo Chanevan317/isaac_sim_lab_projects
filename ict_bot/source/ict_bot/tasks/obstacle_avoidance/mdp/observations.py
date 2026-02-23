@@ -10,54 +10,54 @@ if TYPE_CHECKING:
     from isaaclab.managers import SceneEntityCfg
 
 
-def rel_target_pos(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+
+def rel_target_pos(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    """Target position in robot's USD local frame."""
     robot = env.scene[robot_cfg.name]
     target = env.scene[target_cfg.name]
-    
-    # Vector from robot to target in world frame
-    pos_rel_w = target.data.root_pos_w - robot.data.root_pos_w
-    
-    # Invert the robot's orientation to get the "local" transform
-    # quat_inv is standard in 2.3.2
-    robot_quat_inv = quat_inv(robot.data.root_quat_w)
-    
-    # Rotate the relative vector by the inverse quaternion
-    return quat_apply(robot_quat_inv, pos_rel_w)
+    pos_w = target.data.root_pos_w - robot.data.root_pos_w
+    q_inv = quat_inv(robot.data.root_quat_w)
+    return quat_apply(q_inv, pos_w)
 
 
-def heading_error(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
-    # Get the local relative position
+def heading_error(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+    """Angle to target where 0.0 rad is the -Y axis (The Face)."""
     local_pos = rel_target_pos(env, robot_cfg, target_cfg)
-    # Angle to target in local XY plane
-    return torch.atan2(local_pos[:, 1], local_pos[:, 0]).unsqueeze(-1)
+    # Standard atan2(y, x) is for +X. For -Y front, we use:
+    # atan2(Side_X, Forward_-Y)
+    angle = torch.atan2(local_pos[:, 0], -local_pos[:, 1])
+    return angle.unsqueeze(-1)
 
 
-def ray_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, num_rays: int = 300, max_distance: float = 4.0):
-    """Returns the ray distances clipped and normalized by a specific range."""
-    # Access the MultiMeshRayCaster sensor
-    raycaster = env.scene[sensor_cfg.name]
+def target_reached(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg, distance: float) -> torch.Tensor:
+    """Checks if the robot is within a specific radius of the target."""
+    robot = env.scene[asset_cfg.name]
+    target = env.scene[target_cfg.name]
     
-    # 1. Get Hit Positions in World Frame (N, B, 3)
-    # If your version uses 'ray_hits_w', use that. 
-    # Most Isaac Lab versions store it in 'pos_w'
-    hit_positions = raycaster.data.ray_hits_w
+    # Calculate Euclidean distance (L2 norm) in world frame
+    # root_pos_w is (num_envs, 3)
+    tgt_dist = torch.norm(target.data.root_pos_w - robot.data.root_pos_w, dim=-1)
     
-    # 2. Get Sensor Position in World Frame (N, 3)
-    sensor_pos = raycaster.data.pos_w.unsqueeze(1) # Shape (N, 1, 3)
+    # Return a boolean tensor (Shape: [num_envs])
+    # IMPORTANT: Isaac Lab Terminations expect Bool, Rewards cast this to Float automatically
+    return tgt_dist <= distance
+
+
+# def heading_error(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+#     """Observation: Corrected for a robot whose front is USD -Y."""
+#     robot = env.scene[robot_cfg.name]
+#     target = env.scene[target_cfg.name]
     
-    # 3. Calculate Euclidean Distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
-    # Shape: (num_envs, num_rays)
-    distances = torch.norm(hit_positions - sensor_pos, dim=-1)
+#     # 1. Vector to target in world frame
+#     pos_w = target.data.root_pos_w - robot.data.root_pos_w
     
-    # 4. Handle Ray Slicing/Padding
-    curr_rays = distances.shape[1]
-    if curr_rays > num_rays:
-        distances = distances[:, :num_rays]
-    elif curr_rays < num_rays:
-        padding = torch.full((distances.shape[0], num_rays - curr_rays), max_distance, device=env.device)
-        distances = torch.cat([distances, padding], dim=1)
+#     # 2. Rotate to robot local frame
+#     q_inv = quat_inv(robot.data.root_quat_w)
+#     local_pos = quat_apply(q_inv, pos_w)
     
-    # 5. Clip and Normalize (0.0 to 1.0)
-    clamped_distances = torch.clamp(distances, max=max_distance) / max_distance
-    
-    return clamped_distances
+#     # 3. MAPPING FIX:
+#     # If Visual Front = USD -Y, then:
+#     # Forward axis is -Y (local_pos[:, 1] * -1)
+#     # Side axis is +X (local_pos[:, 0])
+#     # atan2(side, forward)
+#     return torch.atan2(local_pos[:, 0], -local_pos[:, 1]).unsqueeze(-1)

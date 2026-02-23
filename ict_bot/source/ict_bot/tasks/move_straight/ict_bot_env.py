@@ -18,10 +18,10 @@ from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.envs.mdp import root_pos_w, root_quat_w, base_lin_vel, base_ang_vel
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
@@ -74,11 +74,15 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms
-        root_pos_w = ObsTerm(func=root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        root_quat_w = ObsTerm(func=root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        root_lin_vel_w = ObsTerm(func=base_lin_vel, params={"asset_cfg": SceneEntityCfg("robot")})
-        root_ang_vel_w = ObsTerm(func=base_ang_vel, params={"asset_cfg": SceneEntityCfg("robot")})
+        heading = ObsTerm(
+            func=mdp.heading_error_xaxis,
+            params={"robot_cfg": SceneEntityCfg("robot")},
+        )
+
+        velocity = ObsTerm(
+            func=mdp.root_lin_vel_w,
+            params={"asset_cfg": SceneEntityCfg("robot")},
+        )
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -92,11 +96,45 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    forward_reward = RewTerm(func=mdp.forward_reward, weight=2.0)
-    backward_penalty = RewTerm(func=mdp.backward_penalty, weight=-5.0)
-    straightness_penalty = RewTerm(func=mdp.straightness_penalty, weight=-1.0)
-    heading_penalty = RewTerm(func=mdp.heading_penalty, weight=-1.0)
-    idle_penalty = RewTerm(func=mdp.idle_penalty, weight=-0.5)
+    # 1. First: Face the X-axis
+    turn_to_x = RewTerm(
+        func=mdp.reward_alignment, 
+        weight=10.0,
+        params={"robot_cfg": SceneEntityCfg("robot")},
+    )
+    
+    # 2. Second: Move along the X-axis using your 'front'
+    move_along_x = RewTerm(
+        func=mdp.reward_forward_velocity_along_x, 
+        weight=5.0,
+        params={"robot_cfg": SceneEntityCfg("robot")},
+    )
+
+    alive = RewTerm(
+        func=mdp.is_alive, 
+        weight=-0.1,
+    )
+
+
+@configclass
+class MyEventCfg:
+    
+    reset_robot_base = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "pose_range": {
+                "x": (0.0, 0.0), 
+                "y": (0.0, 0.0), 
+                "z": (0.2, 0.2),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
+            },
+            "velocity_range": {}, # Sets all velocities to 0
+        },
+    )
 
 
 @configclass
@@ -123,6 +161,7 @@ class MoveStraightEnvCfg(ManagerBasedRLEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
+    events: MyEventCfg = MyEventCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
     def __post_init__(self):
