@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 
-def rel_target_pos(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+def rel_target_pos(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
     """Target position in robot's USD local frame."""
     robot = env.scene[robot_cfg.name]
     target = env.scene[target_cfg.name]
@@ -20,7 +20,7 @@ def rel_target_pos(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
     return quat_apply(q_inv, pos_w)
 
 
-def heading_error(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+def heading_error(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
     """Angle to target where 0.0 rad is the -Y axis (The Face)."""
     local_pos = rel_target_pos(env, robot_cfg, target_cfg)
     # Standard atan2(y, x) is for +X. For -Y front, we use:
@@ -29,9 +29,9 @@ def heading_error(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
     return angle.unsqueeze(-1)
 
 
-def target_reached(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg, distance: float) -> torch.Tensor:
+def target_reached(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg, distance: float) -> torch.Tensor:
     """Checks if the robot is within a specific radius of the target."""
-    robot = env.scene[asset_cfg.name]
+    robot = env.scene[robot_cfg.name]
     target = env.scene[target_cfg.name]
     
     # Calculate Euclidean distance (L2 norm) in world frame
@@ -43,21 +43,37 @@ def target_reached(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_cfg
     return tgt_dist <= distance
 
 
-# def heading_error(env, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
-#     """Observation: Corrected for a robot whose front is USD -Y."""
-#     robot = env.scene[robot_cfg.name]
-#     target = env.scene[target_cfg.name]
+def lidar_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_distance: float = 0.5):
+    """Returns normalized Lidar distances [0, 1]. 0 is hit, 1 is clear."""
+    raycaster = env.scene[sensor_cfg.name]
     
-#     # 1. Vector to target in world frame
-#     pos_w = target.data.root_pos_w - robot.data.root_pos_w
+    # Calculate distance from sensor to hit points
+    # raycaster.data.pos_w: (num_envs, num_rays, 3)
+    # raycaster.data.sensor_pos_w: (num_envs, 3)
+    hit_positions = raycaster.data.ray_hits_w
+    sensor_pos = raycaster.data.pos_w.unsqueeze(1)
     
-#     # 2. Rotate to robot local frame
-#     q_inv = quat_inv(robot.data.root_quat_w)
-#     local_pos = quat_apply(q_inv, pos_w)
+    # Calculate Euclidean distance
+    distances = torch.norm(hit_positions - sensor_pos, dim=-1)
     
-#     # 3. MAPPING FIX:
-#     # If Visual Front = USD -Y, then:
-#     # Forward axis is -Y (local_pos[:, 1] * -1)
-#     # Side axis is +X (local_pos[:, 0])
-#     # atan2(side, forward)
-#     return torch.atan2(local_pos[:, 0], -local_pos[:, 1]).unsqueeze(-1)
+    # Clip and normalize. 0.0 means touching a wall, 1.0 means clear path (>0.5m)
+    return torch.clamp(distances, max=max_distance) / max_distance
+
+
+def contact_sensor_threshold_filtered(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float) -> torch.Tensor:
+    """
+    Terminates ONLY if force comes from the filtered objects (Obstacles).
+    Ignores the ground contact from your caster wheel.
+    """
+    sensor = env.scene.sensors[sensor_cfg.name]
+    
+    # force_matrix_w shape: (num_envs, num_bodies, num_filters, 3)
+    # This matrix ONLY populates indices for objects in your 'filter_prim_paths_expr'
+    filtered_contact_forces = sensor.data.force_matrix_w
+    
+    # Calculate the magnitude of forces coming ONLY from the filtered obstacles
+    # We take the norm across the XYZ (last dim) and sum across bodies/filters
+    force_mag = torch.norm(filtered_contact_forces, dim=-1)
+    max_force = torch.max(force_mag.view(env.num_envs, -1), dim=-1)[0]
+    
+    return max_force > threshold
