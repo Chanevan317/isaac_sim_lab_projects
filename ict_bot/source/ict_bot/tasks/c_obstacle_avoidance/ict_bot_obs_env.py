@@ -11,7 +11,10 @@ import torch
 from collections.abc import Sequence
 
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
-from ict_bot.tasks.move_straight.ict_bot_env import MoveStraightSceneCfg
+from ict_bot.tasks.b_reach_target.ict_bot_target_env import ReachTargetSceneCfg
+from ict_bot.tasks.b_reach_target.ict_bot_target_env import ActionsCfg as ReachTargetActionsCfg
+from ict_bot.tasks.b_reach_target.ict_bot_target_env import MyEventCfg as ReachTargetEventCfg
+from ict_bot.tasks.b_reach_target.ict_bot_target_env import TerminationsCfg as ReachTargetTerminationsCfg
 from isaaclab.sensors import MultiMeshRayCasterCfg, patterns, ContactSensorCfg
 import isaaclab.sim as sim_utils
 
@@ -20,7 +23,7 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 
 
 # import mdp
-import ict_bot.tasks.obstacle_avoidance.mdp as mdp
+import ict_bot.tasks.c_obstacle_avoidance.mdp as mdp
 from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
@@ -39,7 +42,7 @@ from isaaclab.utils import configclass
 
 
 @configclass
-class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
+class ObstacleAvoidanceSceneCfg(ReachTargetSceneCfg):
     """Configuration for the scene."""
     
     def __post_init__(self):
@@ -77,30 +80,11 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
         debug_vis=True,
     )
 
-    # Target cone configuration
-    target = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Target_cone",
-        spawn=sim_utils.ConeCfg(
-            radius=0.1,
-            height=0.5,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False, # Keeps it on the floor
-                max_depenetration_velocity=1.0,
-            ),
-            # This allows it to hit the floor but we can ignore it in the robot's logic
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=True,
-            ),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.15)),
-    )
-
     contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base", # Matches all robot parts
         update_period=0.0, # Update every physics step
         history_length=3,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/obstacles/scene/.*"], # Optional: only detect obstacles
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/obstacles"], # Only report contacts with obstacles
         visualizer_cfg=True,
     )
 
@@ -112,14 +96,9 @@ class ObstacleAvoidanceSceneCfg(MoveStraightSceneCfg):
 
 
 @configclass
-class ActionsCfg:
+class ActionsCfg(ReachTargetActionsCfg):
     """Action specifications for the MDP."""
 
-    wheel_action: JointVelocityActionCfg = JointVelocityActionCfg(
-        asset_name="robot",
-        joint_names=["right_wheel_joint", "left_wheel_joint"],
-        scale=6.0,
-    )
 
 
 @configclass
@@ -137,10 +116,10 @@ class ObservationsCfg:
         )
 
         # Heading Error (The -Y 'Compass')
-        # heading = ObsTerm(
-        #     func=mdp.heading_error, 
-        #     params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
-        # )
+        heading = ObsTerm(
+            func=mdp.heading_error, 
+            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+        )
 
         # Velocities & Actions
         base_vel = ObsTerm(func=mdp.base_lin_vel)
@@ -166,97 +145,56 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Forward-Only Progress
-    # progress = RewTerm(
-    #     func=mdp.reward_gated_progress_neg_y, 
-    #     weight=20.0, 
-    #     params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
-    # )
-
-    velocity_projection = RewTerm(
-        func=mdp.reward_directional_progress, 
-        weight=20.0, 
+    # --- POSITIVE MOTIVATION ---
+    drive = RewTerm(
+        func=mdp.reward_velocity_to_target, 
+        weight=50.0, 
         params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
     )
 
-    lidar_repulsion = RewTerm(
-        func=mdp.reward_virtual_bumper,
-        weight=-25.0,
-        params={"sensor_cfg": SceneEntityCfg("raycaster")}
+    clear_path = RewTerm(
+        func=mdp.reward_target_clearing,
+        weight=20.0,
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "sensor_cfg": SceneEntityCfg("raycaster")}
     )
-
-    reverse_penalty = RewTerm(
-        func=mdp.penalty_anti_reverse,
-        weight=-60.0,
-        params={"robot_cfg": SceneEntityCfg("robot")}
-    )
-
-    time_penalty = RewTerm(
-        func=mdp.reward_time_tax,
-        weight=-0.2,
-    )
-
+    
     success = RewTerm(
         func=mdp.target_reached, 
-        weight=500.0, 
+        weight=1000.0, 
         params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.4}
     )
 
+    # --- NEGATIVE CONSTRAINTS ---
+    no_reverse = RewTerm(
+        func=mdp.penalty_anti_reverse, 
+        weight=-500.0, 
+        params={"robot_cfg": SceneEntityCfg("robot")}
+    )
+
+    action_rate = RewTerm(
+        func=mdp.action_rate_l2,
+        weight=-10.0,
+    )
+
+    alive = RewTerm(
+        func=mdp.is_alive, 
+        weight=-0.5
+    )
+
 
 @configclass
-class MyEventCfg:
+class MyEventCfg(ReachTargetEventCfg):
+    """Event specifications for the MDP."""
     
-    reset_robot_base = EventTerm(
-        func=mdp.reset_root_state_uniform,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "pose_range": {
-                "x": (0.0, 0.0), 
-                "y": (0.0, 0.0), 
-                "z": (0.2, 0.2),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
-            },
-            "velocity_range": {}, # Sets all velocities to 0
-        },
-    )
-
-    reset_target_position = EventTerm(
-        func=mdp.reset_target_in_ring,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("target"),
-            "radius_range": (2.5, 2.6), # 2.5m to 2.6m distance
-            "z_height": 0.6            # Exactly half the cone height
-        },
-    )
 
 
 @configclass
-class TerminationsCfg:
+class TerminationsCfg(ReachTargetTerminationsCfg):
     """Termination terms for the MDP."""
-
-    time_out = DoneTerm(
-        func=mdp.time_out, 
-        time_out=True
-    )
-
-    # Terminate if the robot reaches the target (Success Reset)
-    # This speeds up training so the robot learns to find a *new* target immediately
-    target_reached = DoneTerm(
-        func=mdp.target_reached,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"), 
-            "target_cfg": SceneEntityCfg("target"), 
-            "distance": 0.4
-        }
-    )
 
     # Terminate if the robot touches anything with a force > 1.0 N
     collision_termination = DoneTerm(
-        func=mdp.contact_sensor_threshold_filtered,
+        func=mdp.illegal_contact,
         params={
             "sensor_cfg": SceneEntityCfg("contact_sensor"), 
             "threshold": 1.0 # Force in Newtons

@@ -58,22 +58,3 @@ def lidar_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_dist
     
     # Clip and normalize. 0.0 means touching a wall, 1.0 means clear path (>0.5m)
     return torch.clamp(distances, max=max_distance) / max_distance
-
-
-def contact_sensor_threshold_filtered(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float) -> torch.Tensor:
-    """
-    Terminates ONLY if force comes from the filtered objects (Obstacles).
-    Ignores the ground contact from your caster wheel.
-    """
-    sensor = env.scene.sensors[sensor_cfg.name]
-    
-    # force_matrix_w shape: (num_envs, num_bodies, num_filters, 3)
-    # This matrix ONLY populates indices for objects in your 'filter_prim_paths_expr'
-    filtered_contact_forces = sensor.data.force_matrix_w
-    
-    # Calculate the magnitude of forces coming ONLY from the filtered obstacles
-    # We take the norm across the XYZ (last dim) and sum across bodies/filters
-    force_mag = torch.norm(filtered_contact_forces, dim=-1)
-    max_force = torch.max(force_mag.view(env.num_envs, -1), dim=-1)[0]
-    
-    return max_force > threshold

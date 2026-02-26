@@ -6,7 +6,7 @@
 # import mdp
 from isaaclab.utils import configclass
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
-from ict_bot.tasks.move_straight.ict_bot_env import MoveStraightEnvCfg
+from ict_bot.tasks.a_move_straight.ict_bot_env import MoveStraightEnvCfg
 
 ##
 # Scene definition

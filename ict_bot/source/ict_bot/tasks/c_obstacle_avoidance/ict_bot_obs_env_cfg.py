@@ -6,7 +6,7 @@
 # import mdp
 from isaaclab.utils import configclass
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
-from ict_bot.tasks.obstacle_avoidance.ict_bot_obs_env import ObstacleAvoidanceEnvCfg
+from ict_bot.tasks.c_obstacle_avoidance.ict_bot_obs_env import ObstacleAvoidanceEnvCfg
 
 ##
 # Scene definition

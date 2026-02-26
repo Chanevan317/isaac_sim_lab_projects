@@ -13,7 +13,7 @@ from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
 import isaaclab.sim as sim_utils
 
 # import mdp
-import ict_bot.tasks.move_straight.mdp as mdp
+import ict_bot.tasks.a_move_straight.mdp as mdp
 from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
@@ -106,7 +106,7 @@ class RewardsCfg:
     # 2. Second: Move along the X-axis using your 'front'
     move_along_x = RewTerm(
         func=mdp.reward_forward_velocity_along_x, 
-        weight=5.0,
+        weight=20.0,
         params={"robot_cfg": SceneEntityCfg("robot")},
     )
 
@@ -127,7 +127,7 @@ class MyEventCfg:
             "pose_range": {
                 "x": (0.0, 0.0), 
                 "y": (0.0, 0.0), 
-                "z": (0.2, 0.2),
+                "z": (0.1, 0.1),
                 "roll": (0.0, 0.0),
                 "pitch": (0.0, 0.0),
                 "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)

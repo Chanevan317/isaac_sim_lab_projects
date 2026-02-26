@@ -35,7 +35,7 @@ ICT_BOT_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.2),
+        pos=(0.0, 0.0, 0.1),
         joint_pos={
             "right_wheel_joint": 0.0,
             "left_wheel_joint": 0.0,
@@ -44,10 +44,10 @@ ICT_BOT_CFG = ArticulationCfg(
     actuators={
         "wheels": ImplicitActuatorCfg(
             joint_names_expr=["right_wheel_joint", "left_wheel_joint"],
-            effort_limit_sim=10000.0,
+            effort_limit_sim=100.0,
             velocity_limit_sim=5.0,
             stiffness=0.0,
-            damping=100000.0,
+            damping=100.0,
         ),
     }
 )
