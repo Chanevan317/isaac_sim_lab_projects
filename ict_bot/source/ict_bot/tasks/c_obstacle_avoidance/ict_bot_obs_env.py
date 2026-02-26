@@ -76,7 +76,7 @@ class ObstacleAvoidanceSceneCfg(ReachTargetSceneCfg):
             horizontal_fov_range=(0.0, 360.0), 
             horizontal_res=1.2 
         ),
-        max_distance=4.0,
+        max_distance=3.0,
         debug_vis=True,
     )
 
@@ -146,39 +146,33 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     # --- POSITIVE MOTIVATION ---
-    drive = RewTerm(
-        func=mdp.reward_velocity_to_target, 
-        weight=50.0, 
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
-    )
-
-    clear_path = RewTerm(
-        func=mdp.reward_target_clearing,
-        weight=20.0,
+    navigation = RewTerm(
+        func=mdp.reward_robust_navigation, 
+        weight=1.0, 
         params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "sensor_cfg": SceneEntityCfg("raycaster")}
     )
     
     success = RewTerm(
         func=mdp.target_reached, 
-        weight=1000.0, 
+        weight=2000.0, 
         params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.4}
     )
 
     # --- NEGATIVE CONSTRAINTS ---
     no_reverse = RewTerm(
         func=mdp.penalty_anti_reverse, 
-        weight=-500.0, 
+        weight=500.0, 
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-10.0,
+        weight=-20.0,
     )
 
     alive = RewTerm(
         func=mdp.is_alive, 
-        weight=-0.5
+        weight=-1.0
     )
 
 
