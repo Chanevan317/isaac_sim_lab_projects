@@ -24,7 +24,6 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 
 # import mdp
 import ict_bot.tasks.c_obstacle_avoidance.mdp as mdp
-from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
@@ -154,25 +153,25 @@ class RewardsCfg:
     
     success = RewTerm(
         func=mdp.target_reached, 
-        weight=2000.0, 
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.4}
+        weight=10000.0, 
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.3}
     )
 
     # --- NEGATIVE CONSTRAINTS ---
     no_reverse = RewTerm(
         func=mdp.penalty_anti_reverse, 
-        weight=500.0, 
+        weight=200.0, 
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-20.0,
+        weight=-0.01,
     )
 
     alive = RewTerm(
         func=mdp.is_alive, 
-        weight=-1.0
+        weight=-5.0
     )
 
 

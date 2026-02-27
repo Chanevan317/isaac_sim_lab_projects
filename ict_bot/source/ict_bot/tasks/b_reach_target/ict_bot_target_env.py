@@ -23,7 +23,6 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 
 # import mdp
 import ict_bot.tasks.b_reach_target.mdp as mdp
-from isaaclab.envs.mdp import JointVelocityActionCfg
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
@@ -55,15 +54,14 @@ class ReachTargetSceneCfg(MoveStraightSceneCfg):
             height=0.5,
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False, # Keeps it on the floor
-                max_depenetration_velocity=1.0,
+                disable_gravity=False,
+                kinematic_enabled=False, 
             ),
-            # This allows it to hit the floor but we can ignore it in the robot's logic
             collision_props=sim_utils.CollisionPropertiesCfg(
                 collision_enabled=True,
             ),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.15)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.25)),
     )
 
 
