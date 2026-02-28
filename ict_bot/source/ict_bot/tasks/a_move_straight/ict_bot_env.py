@@ -63,7 +63,7 @@ class ActionsCfg:
     wheel_action: JointVelocityActionCfg = JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["right_wheel_joint", "left_wheel_joint"],
-        scale=10.0,
+        scale=5.0,
     )
 
 @configclass
@@ -106,7 +106,7 @@ class RewardsCfg:
     # 2. Second: Move along the X-axis using your 'front'
     move_along_x = RewTerm(
         func=mdp.reward_forward_velocity_along_x, 
-        weight=20.0,
+        weight=50.0,
         params={"robot_cfg": SceneEntityCfg("robot")},
     )
 

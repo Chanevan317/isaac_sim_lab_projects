@@ -5,12 +5,10 @@
 
 from __future__ import annotations
 
-from dataclasses import MISSING
-from networkx import reverse
 import torch
 from collections.abc import Sequence
 
-from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
+from ict_bot.assets.markers.target_cone import TARGET_CONE_CFG
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import ReachTargetSceneCfg
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import ActionsCfg as ReachTargetActionsCfg
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import MyEventCfg as ReachTargetEventCfg
@@ -24,13 +22,13 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 
 # import mdp
 import ict_bot.tasks.c_obstacle_avoidance.mdp as mdp
-from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.markers import VisualizationMarkers
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
-from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 
@@ -48,7 +46,7 @@ class ObstacleAvoidanceSceneCfg(ReachTargetSceneCfg):
         super().__post_init__()
 
     # obstacle avoidance scene assets
-    obstacles = AssetBaseCfg(
+    scene = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/obstacles",
         spawn=sim_utils.UsdFileCfg(
             usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "obstacle_avoidance_scene.usd"),
@@ -111,13 +109,13 @@ class ObservationsCfg:
         # Target Pos (Used to see the goal distance/direction)
         target_pos = ObsTerm(
             func=mdp.rel_target_pos, 
-            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+            params={"robot_cfg": SceneEntityCfg("robot")}
         )
 
         # Heading Error (The -Y 'Compass')
         heading = ObsTerm(
             func=mdp.heading_error, 
-            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+            params={"robot_cfg": SceneEntityCfg("robot")}
         )
 
         # Velocities & Actions
@@ -147,14 +145,14 @@ class RewardsCfg:
     # --- POSITIVE MOTIVATION ---
     navigation = RewTerm(
         func=mdp.reward_robust_navigation, 
-        weight=1.0, 
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "sensor_cfg": SceneEntityCfg("raycaster")}
+        weight=2.0, 
+        params={"robot_cfg": SceneEntityCfg("robot"), "sensor_cfg": SceneEntityCfg("raycaster")}
     )
     
     success = RewTerm(
         func=mdp.target_reached, 
         weight=10000.0, 
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.3}
+        params={"robot_cfg": SceneEntityCfg("robot"), "distance": 0.3}
     )
 
     # --- NEGATIVE CONSTRAINTS ---
@@ -215,6 +213,8 @@ class ObstacleAvoidanceEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
+    target_marker_cfg = TARGET_CONE_CFG
+
     def __post_init__(self):
         """Post initialization."""
         # general settings
@@ -237,11 +237,24 @@ class ObstacleAvoidanceEnv(ManagerBasedRLEnv):
     cfg: ObstacleAvoidanceEnvCfg
     
     def __init__(self, cfg: ObstacleAvoidanceEnvCfg, render_mode: str | None = None, **kwargs):
+
+        self.target_pos = torch.zeros((cfg.scene.num_envs, 3), device=cfg.sim.device)
+        self.prev_tgt_dist = torch.zeros(cfg.scene.num_envs, device=cfg.sim.device)
+
         super().__init__(cfg, render_mode, **kwargs)
         
         # Find wheel joint indices
         indices, _ = self.scene["robot"].find_joints(self.cfg.wheel_dof_name)
         self._wheel_indices = torch.tensor(indices, device=self.device, dtype=torch.long)
+
+        # Use the config from the EnvCfg
+        self.target_marker = VisualizationMarkers(self.cfg.target_marker_cfg)
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # This ensures the marker is drawn at the desired location
+        if debug_vis:
+            # 'self.target_pos' would be the tensor you track for rewards
+            self.target_marker.visualize(self.target_pos)
     
     def _reset_idx(self, env_ids: Sequence[int] | None) -> None:
         """Reset selected environments."""
@@ -272,7 +285,7 @@ class ObstacleAvoidanceEnv(ManagerBasedRLEnv):
         if hasattr(self, "prev_tgt_dist"):
             # Get the new world positions after the reset events have fired
             robot_pos = self.scene["robot"].data.root_pos_w[env_ids]
-            target_pos = self.scene["target"].data.root_pos_w[env_ids]
+            target_pos = self.target_pos[env_ids]
             
             # Calculate the fresh distance for the new episode start
             new_dist = torch.norm(target_pos - robot_pos, dim=-1)
@@ -283,3 +296,18 @@ class ObstacleAvoidanceEnv(ManagerBasedRLEnv):
             # We can't easily calculate alignment here without mdp helper, 
             # so setting to a neutral 0.0 is usually safe.
             self.prev_alignment[env_ids] = 0.0
+
+        
+        # Update the marker visualization immediately after a reset
+        # This prevents the marker from "lagging" behind the logic
+        if self.sim.has_gui():
+            self.target_marker.visualize(self.target_pos)
+
+        # Updated Progress Reward Logic
+        if hasattr(self, "prev_tgt_dist"):
+            robot_pos = self.scene["robot"].data.root_pos_w[env_ids]
+            # Use self.target_pos instead of self.scene["target"]
+            target_pos = self.target_pos[env_ids] 
+            
+            new_dist = torch.norm(target_pos - robot_pos, dim=-1)
+            self.prev_tgt_dist[env_ids] = new_dist

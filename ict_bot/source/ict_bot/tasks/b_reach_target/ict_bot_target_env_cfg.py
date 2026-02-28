@@ -8,6 +8,7 @@ from isaaclab.utils import configclass
 from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import ReachTargetEnvCfg
 
+
 ##
 # Scene definition
 ##

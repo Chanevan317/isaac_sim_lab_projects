@@ -6,25 +6,19 @@
 from __future__ import annotations
 
 from dataclasses import MISSING
-from networkx import reverse
 import torch
 from collections.abc import Sequence
 
-from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
+from ict_bot.assets.markers.target_cone import TARGET_CONE_CFG
 from ict_bot.tasks.a_move_straight.ict_bot_env import MoveStraightSceneCfg
 from ict_bot.tasks.a_move_straight.ict_bot_env import ActionsCfg as MoveStraightActionsCfg
 from ict_bot.tasks.a_move_straight.ict_bot_env import MyEventCfg as MoveStraightEventsCfg
 
-import isaaclab.sim as sim_utils
-
-import os
-from ict_bot import ICT_BOT_ASSETS_DIR
-
 
 # import mdp
 import ict_bot.tasks.b_reach_target.mdp as mdp
-from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
+from isaaclab.markers import VisualizationMarkers
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -45,24 +39,6 @@ class ReachTargetSceneCfg(MoveStraightSceneCfg):
     
     def __post_init__(self):
         super().__post_init__()
-
-    # Target cone configuration
-    target = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Target_cone",
-        spawn=sim_utils.ConeCfg(
-            radius=0.1,
-            height=0.5,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False,
-                kinematic_enabled=False, 
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=True,
-            ),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(4.0, 0.0, 0.25)),
-    )
 
 
 ##
@@ -86,13 +62,13 @@ class ObservationsCfg:
         # Target Pos (Used to see the goal distance/direction)
         target_pos = ObsTerm(
             func=mdp.rel_target_pos, 
-            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+            params={"robot_cfg": SceneEntityCfg("robot")}
         )
 
         # Heading Error (The -Y 'Compass')
         heading = ObsTerm(
             func=mdp.heading_error, 
-            params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+            params={"robot_cfg": SceneEntityCfg("robot")}
         )
         
         # Velocities & Actions
@@ -115,19 +91,19 @@ class RewardsCfg:
     heading_error = RewTerm(
         func=mdp.heading_error_reward,
         weight=100.0,
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+        params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     # Forward-Only Progress
     progress = RewTerm(
         func=mdp.reward_gated_progress_neg_y, 
         weight=3000.0, 
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target")}
+        params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-10.0,
+        weight=-50.0,
     )
 
     backwards_penalty = RewTerm(
@@ -138,27 +114,26 @@ class RewardsCfg:
 
     alive = RewTerm(
         func=mdp.is_alive,
-        weight=-1.0,
+        weight=-15.0,
     )
 
     target_reached = RewTerm(
         func=mdp.target_reached,
-        weight=5000.0,
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("target"), "distance": 0.3}
+        weight=10000.0,
+        params={"robot_cfg": SceneEntityCfg("robot"), "distance": 0.12}
     )
 
 
 
 @configclass
 class MyEventCfg(MoveStraightEventsCfg):
-
+    
     reset_target_position = EventTerm(
-        func=mdp.reset_target_in_ring,
+        func=mdp.reset_target_marker_in_ring,
         mode="reset",
         params={
-            "asset_cfg": SceneEntityCfg("target"),
-            "radius_range": (2.5, 2.6), # 2.5m to 2.6m distance
-            "z_height": 0.6            # Exactly half the cone height
+            "radius_range": (2.5, 2.6),
+            "z_height": 0.25 # Height of the cone base/center
         },
     )
 
@@ -178,8 +153,7 @@ class TerminationsCfg:
         func=mdp.target_reached,
         params={
             "robot_cfg": SceneEntityCfg("robot"), 
-            "target_cfg": SceneEntityCfg("target"), 
-            "distance": 0.3
+            "distance": 0.1
         }
     )
 
@@ -204,6 +178,8 @@ class ReachTargetEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
+    target_marker_cfg = TARGET_CONE_CFG
+
     def __post_init__(self):
         """Post initialization."""
         # general settings
@@ -225,11 +201,24 @@ class ReachTargetEnv(ManagerBasedRLEnv):
     cfg: ReachTargetEnvCfg
     
     def __init__(self, cfg: ReachTargetEnvCfg, render_mode: str | None = None, **kwargs):
+        
+        self.target_pos = torch.zeros((cfg.scene.num_envs, 3), device=cfg.sim.device)
+        self.prev_tgt_dist = torch.zeros(cfg.scene.num_envs, device=cfg.sim.device)
+
         super().__init__(cfg, render_mode, **kwargs)
         
         # Find wheel joint indices
         indices, _ = self.scene["robot"].find_joints(self.cfg.wheel_dof_name)
         self._wheel_indices = torch.tensor(indices, device=self.device, dtype=torch.long)
+
+        # Use the config from the EnvCfg
+        self.target_marker = VisualizationMarkers(self.cfg.target_marker_cfg)
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # This ensures the marker is drawn at the desired location
+        if debug_vis:
+            # 'self.target_pos' would be the tensor you track for rewards
+            self.target_marker.visualize(self.target_pos)
     
     def _reset_idx(self, env_ids: Sequence[int] | None) -> None:
         """Reset selected environments."""
@@ -260,7 +249,8 @@ class ReachTargetEnv(ManagerBasedRLEnv):
         if hasattr(self, "prev_tgt_dist"):
             # Get the new world positions after the reset events have fired
             robot_pos = self.scene["robot"].data.root_pos_w[env_ids]
-            target_pos = self.scene["target"].data.root_pos_w[env_ids]
+            # target_pos = self.scene["target"].data.root_pos_w[env_ids]
+            target_pos = self.target_pos[env_ids]
             
             # Calculate the fresh distance for the new episode start
             new_dist = torch.norm(target_pos - robot_pos, dim=-1)
@@ -271,3 +261,18 @@ class ReachTargetEnv(ManagerBasedRLEnv):
             # We can't easily calculate alignment here without mdp helper, 
             # so setting to a neutral 0.0 is usually safe.
             self.prev_alignment[env_ids] = 0.0
+
+
+        # Update the marker visualization immediately after a reset
+        # This prevents the marker from "lagging" behind the logic
+        if self.sim.has_gui():
+            self.target_marker.visualize(self.target_pos)
+
+        # Updated Progress Reward Logic
+        if hasattr(self, "prev_tgt_dist"):
+            robot_pos = self.scene["robot"].data.root_pos_w[env_ids]
+            # Use self.target_pos instead of self.scene["target"]
+            target_pos = self.target_pos[env_ids] 
+            
+            new_dist = torch.norm(target_pos - robot_pos, dim=-1)
+            self.prev_tgt_dist[env_ids] = new_dist

@@ -14,9 +14,9 @@ from isaaclab.utils.math import quat_apply
 
 
 
-def reward_robust_navigation(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg):
+def reward_robust_navigation(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg):
     robot = env.scene[robot_cfg.name]
-    target = env.scene[target_cfg.name]
+    target = env.target_pos
     
     # --- 1. COORDINATE SETUP ---
     quat = robot.data.root_quat_w
@@ -24,7 +24,7 @@ def reward_robust_navigation(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, 
     front_world = quat_apply(quat, front_body)[:, :2]
     front_world = front_world / (torch.norm(front_world, dim=-1, keepdim=True) + 1e-6)
 
-    target_vec = target.data.root_pos_w[:, :2] - robot.data.root_pos_w[:, :2]
+    target_vec = target[:, :2] - robot.data.root_pos_w[:, :2]
     target_dist = torch.norm(target_vec, dim=-1, keepdim=True).squeeze(-1)
     target_dir = target_vec / (target_dist.unsqueeze(-1) + 1e-6)
 

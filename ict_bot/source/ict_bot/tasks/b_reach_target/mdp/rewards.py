@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 
 
 
-def heading_error_reward(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+def heading_error_reward(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     """Reward: High when -Y face is aligned with target. Returns flat [N] tensor."""
     # 1. Call the observation function: returns [4096, 1]
-    error_obs = heading_error(env, robot_cfg, target_cfg)
+    error_obs = heading_error(env, robot_cfg)
     
     # 2. Squeeze the last dimension: returns [4096]
     error_rad = error_obs.squeeze(-1)
@@ -24,17 +24,17 @@ def heading_error_reward(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, targ
     return torch.cos(error_rad)
 
 
-def reward_gated_progress_neg_y(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, target_cfg: SceneEntityCfg):
+def reward_gated_progress_neg_y(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     """Rewards moving closer ONLY if the -Y face is pointed at the target."""
     # 1. Distance Delta
-    current_dist = torch.norm(env.scene[target_cfg.name].data.root_pos_w - env.scene[robot_cfg.name].data.root_pos_w, dim=-1)
+    current_dist = torch.norm(env.target_pos - env.scene[robot_cfg.name].data.root_pos_w, dim=-1)
     if not hasattr(env, "prev_tgt_dist"):
         env.prev_tgt_dist = current_dist.clone()
     dist_delta = env.prev_tgt_dist - current_dist
     env.prev_tgt_dist = current_dist.clone()
 
     # 2. Strict Alignment (Must be within ~11 degrees)
-    error_rad = heading_error(env, robot_cfg, target_cfg).squeeze(-1)
+    error_rad = heading_error(env, robot_cfg).squeeze(-1)
     alignment = torch.cos(error_rad)
     
     # 3. THE GATE: 0.98 is a very tight window.
