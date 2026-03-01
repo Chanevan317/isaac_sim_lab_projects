@@ -77,4 +77,4 @@ def penalty_anti_reverse(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     robot = env.scene[robot_cfg.name]
     # In -Y front setup, +Y body velocity is backward.
     backward_vel = robot.data.root_lin_vel_b[:, 1]
-    return -torch.clamp(backward_vel, min=0.0)
+    return torch.clamp(backward_vel, min=0.0)

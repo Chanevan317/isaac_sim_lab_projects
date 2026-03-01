@@ -145,7 +145,7 @@ class RewardsCfg:
     # --- POSITIVE MOTIVATION ---
     navigation = RewTerm(
         func=mdp.reward_robust_navigation, 
-        weight=2.0, 
+        weight=1.0, 
         params={"robot_cfg": SceneEntityCfg("robot"), "sensor_cfg": SceneEntityCfg("raycaster")}
     )
     
@@ -158,18 +158,18 @@ class RewardsCfg:
     # --- NEGATIVE CONSTRAINTS ---
     no_reverse = RewTerm(
         func=mdp.penalty_anti_reverse, 
-        weight=200.0, 
+        weight=-500.0, 
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.01,
+        weight=-0.1,
     )
 
     alive = RewTerm(
         func=mdp.is_alive, 
-        weight=-5.0
+        weight=-10.0
     )
 
 

@@ -5,8 +5,7 @@
 
 # import mdp
 from isaaclab.utils import configclass
-from ict_bot.assets.robots.ict_bot import ICT_BOT_CFG
-from ict_bot.tasks.c_obstacle_avoidance.ict_bot_obs_env import ObstacleAvoidanceEnvCfg
+from ict_bot.tasks.d_square_track.ict_bot_sq_track_env import SquareTrackEnvCfg
 
 ##
 # Scene definition
@@ -14,7 +13,7 @@ from ict_bot.tasks.c_obstacle_avoidance.ict_bot_obs_env import ObstacleAvoidance
 
 
 @configclass
-class IctBotObsEnvCfg(ObstacleAvoidanceEnvCfg):
+class IctBotSqTrackEnvCfg(SquareTrackEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -40,10 +39,11 @@ class IctBotObsEnvCfg(ObstacleAvoidanceEnvCfg):
 
 
 @configclass
-class IctBotObsEnvCfg_PLAY(IctBotObsEnvCfg):
+class IctBotSqTrackEnvCfg_PLAY(IctBotSqTrackEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
+        self.episode_length_s = 1000000000.0
         # make a smaller scene for play
         self.scene.num_envs = 1
         # disable randomization for play

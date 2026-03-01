@@ -66,6 +66,7 @@ class ActionsCfg:
         scale=5.0,
     )
 
+
 @configclass
 class ObservationsCfg:
     """Observation specifications for the MDP."""
