@@ -17,7 +17,7 @@ import isaaclab.sim as sim_utils
 # import mdp
 import confidence_bot.tasks.confidence_bot.mdp as mdp
 from isaaclab.envs.mdp import JointVelocityActionCfg
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -28,10 +28,10 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 
+
 ##
 # Scene definition
 ##
-
 
 @configclass
 class ConfidenceBotSceneCfg(InteractiveSceneCfg):
@@ -54,6 +54,7 @@ class ConfidenceBotSceneCfg(InteractiveSceneCfg):
 
     # april tag
     april_tag = APRILTAG_CFG.replace(prim_path="{ENV_REGEX_NS}/AprilTag")
+
 
 
 ##
@@ -108,7 +109,7 @@ class MyEventCfg:
             "pose_range": {
                 "x": (0.0, 0.0), 
                 "y": (0.0, 0.0), 
-                "z": (0.3, 0.3),
+                "z": (0.2, 0.2),
                 "roll": (0.0, 0.0),
                 "pitch": (0.0, 0.0),
                 "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
@@ -116,25 +117,39 @@ class MyEventCfg:
             "velocity_range": {}, # Sets all velocities to 0
         },
     )
-
-    # 2. Randomize Camera Height (Z) and Tilt (Pitch)
-    # We apply this to the 'tiled_camera' sensor attached to the robot
-    randomize_camera_spec = EventTerm(
-        func=mdp.reset_sensor_posture_uniform,
+    
+    # Teleport the AprilTag to a random spot 1.5m to 3.0m in front of robot
+    reset_tag = EventTerm(
+        func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "sensor_cfg": SceneEntityCfg("robot", sensor_names=["tiled_camera"]),
+            "asset_cfg": SceneEntityCfg("april_tag"),
             "pose_range": {
-                "z": (0.375, 0.75),        # Half-pole to Full-pole height
-                "pitch": (-0.087, 0.087),  # +/- 5 degrees in radians
+                "x": (1.5, 3.0), 
+                "y": (-1.0, 1.0), 
+                "z": (0.01, 0.01)
             },
         },
     )
 
-    # 3. Randomize Field of View (FOV)
+    # Randomize Camera Height (Z) and Tilt (Pitch)
+    # We apply this to the 'tiled_camera' sensor attached to the robot
+    randomize_camera_spec = EventTerm(
+        func=mdp.reset_camera_posture_uniform,
+        mode="reset",
+        params={
+            "sensor_cfg": SceneEntityCfg("robot", sensor_names=["tiled_camera"]),
+            "pose_range": {
+                "z_range": (0.375, 0.75),        # Half-pole to Full-pole height
+                "pitch_range": (-0.17, 0.17),  # +/- 10 degrees in radians
+            },
+        },
+    )
+
+    # Randomize Field of View (FOV)
     # This ensures the robot handles different focal lengths/zoom levels
     randomize_camera_fov = EventTerm(
-        func=mdp.update_camera_intrinsic_matrix_uniform,
+        func=mdp.update_camera_fov_uniform,
         mode="reset",
         params={
             "sensor_cfg": SceneEntityCfg("robot", sensor_names=["tiled_camera"]),

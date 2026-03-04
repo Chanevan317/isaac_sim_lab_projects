@@ -69,7 +69,7 @@ CONFIDENCE_BOT_CFG = ArticulationCfg(
             data_types=["rgb", "distance_to_image_plane"],
             offset=TiledCameraCfg.OffsetCfg(
                 pos=(0.21, 0.0, 0.75), # X=front of pole, Y=centered, Z=top of pole
-                rot=(1.0, 0.0, 0.0, 0.0), # Looking straight forward
+                rot=(0.9239, 0.0, 0.3827, 0.0), # 45 deg down
                 convention="ros", # Uses standard ROS camera axes
             ),
             spawn=sim_utils.PinholeCameraCfg(
