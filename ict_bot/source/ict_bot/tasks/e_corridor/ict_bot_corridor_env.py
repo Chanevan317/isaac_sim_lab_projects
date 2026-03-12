@@ -8,10 +8,9 @@ from __future__ import annotations
 import torch
 from collections.abc import Sequence
 
-from ict_bot.tasks.c_obstacle_avoidance.ict_bot_obs_env import ObstacleAvoidanceSceneCfg
+from ict_bot.assets.markers.target_cone import TARGET_CONE_CFG
+from ict_bot.tasks.a_move_straight.ict_bot_env import MoveStraightSceneCfg
 from ict_bot.tasks.a_move_straight.ict_bot_env import ActionsCfg as MoveStraightActionsCfg
-from ict_bot.tasks.a_move_straight.ict_bot_env import MyEventCfg as MoveStraightEventCfg
-from ict_bot.tasks.c_obstacle_avoidance.ict_bot_obs_env import TerminationsCfg as ObstacleAvoidanceTerminationsCfg
 import isaaclab.sim as sim_utils
 
 import os
@@ -19,15 +18,18 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 
 
 # import mdp
-from ict_bot.tasks.c_obstacle_avoidance.mdp.observations import lidar_distances, target_reached
-from ict_bot.tasks.c_obstacle_avoidance.mdp.rewards import penalty_anti_reverse
 import ict_bot.tasks.e_corridor.mdp as mdp
+from isaaclab.assets import AssetBaseCfg
+from isaaclab.sensors import MultiMeshRayCasterCfg, patterns, ContactSensorCfg, ImuCfg
+from isaaclab.markers import VisualizationMarkers
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.managers import CurriculumTermCfg as CurTerm
 from isaaclab.utils import configclass
 
 
@@ -37,18 +39,59 @@ from isaaclab.utils import configclass
 
 
 @configclass
-class CorridorEnvSceneCfg(ObstacleAvoidanceSceneCfg):
+class CorridorEnvSceneCfg(MoveStraightSceneCfg):
     """Configuration for the scene."""
 
     def __post_init__(self):
         super().__post_init__()
 
-        if self.scene is not None:
-            self.scene = self.scene.replace(
-                spawn=self.scene.spawn.replace(
-                    usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "corridor.usd")
-                )
+    # corridor scene asset
+    scene = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/obstacles",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=os.path.join(ICT_BOT_ASSETS_DIR, "scenes", "corridor.usd"),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+    )
+
+    # Raycaster configuration for obstacle avoidance
+    raycaster = MultiMeshRayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base",
+        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.2)),
+        mesh_prim_paths=[
+            MultiMeshRayCasterCfg.RaycastTargetCfg(
+                prim_expr="{ENV_REGEX_NS}/obstacles", 
+                is_shared=True, 
+                merge_prim_meshes=True, 
+                track_mesh_transforms=False
             )
+        ],
+        pattern_cfg=patterns.LidarPatternCfg(
+            channels=1, 
+            vertical_fov_range=(0.0, 0.0), 
+            horizontal_fov_range=(0.0, 360.0), 
+            horizontal_res=5.0
+        ),
+        max_distance=4.0,
+        debug_vis=True,
+    )
+
+    # Contact sensors to detect the collision with the base of the robot
+    contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base", # Matches all robot parts
+        update_period=0.0, # Update every physics step
+        history_length=3,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/obstacles"], # Only report contacts with obstacles
+        visualizer_cfg=True,
+    )
+
+    # IMU sensor
+    imu = ImuCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/ict_bot_01/link_base", 
+        update_period=0.01,
+        gravity_bias=(0.0, 0.0, 9.81),
+    )
 
 
 
@@ -71,16 +114,34 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # Velocities & Actions
-        base_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        actions = ObsTerm(func=mdp.last_action)
-
-        # Obstacle Awareness: 300 rays of depth data
-        lidar = ObsTerm(
-            func=lidar_distances, 
-            params={"sensor_cfg": SceneEntityCfg("raycaster"), "max_distance": 4.0}
+        # 1. Position to Target
+        rel_target = ObsTerm(
+            func=mdp.rel_target_pos,
+            params={"robot_cfg": SceneEntityCfg("robot")}
         )
+
+        # 2. Heading Error
+        heading = ObsTerm(
+            func=mdp.heading_error,
+            params={"robot_cfg": SceneEntityCfg("robot")}
+        )
+
+        # 3. Lidar with History
+        lidar = ObsTerm(
+            func=mdp.lidar_distances,
+            params={"sensor_cfg": SceneEntityCfg("raycaster")},
+            history_length=3,
+            flatten_history_dim=True
+        )
+
+        # 4. IMU Data
+        imu = ObsTerm(
+            func=mdp.imu_observations,
+            params={"sensor_cfg": SceneEntityCfg("imu")}
+        )
+        
+        # 5. Actions History (Helps with smoothness)
+        last_action = ObsTerm(func=mdp.last_action, history_length=1)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -96,25 +157,40 @@ class RewardsCfg:
 
     # --- POSITIVE MOTIVATION ---
     progress = RewTerm(
-        func=mdp.reward_clear_path,
-        weight=2.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("raycaster"),
-            "robot_cfg": SceneEntityCfg("robot"),
-        }
+        func=mdp.progress_to_target,
+        weight=15.0,
+        params={"robot_cfg": SceneEntityCfg("robot")}
+    )
+
+    align = RewTerm(
+        func=mdp.align_to_target,
+        weight=3.0,
+        params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     reached = RewTerm(
-        func=target_reached,
-        weight=5000.0,
+        func=mdp.target_reached,
+        weight=200.0,
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     # --- NEGATIVE CONSTRAINTS ---
     no_reverse = RewTerm(
-        func=penalty_anti_reverse, 
+        func=mdp.penalty_anti_reverse, 
         weight=-1000.0, 
         params={"robot_cfg": SceneEntityCfg("robot")}
+    )
+
+    wall_dist = RewTerm(
+        func=mdp.lidar_proximity_penalty,
+        weight=-10.0,
+        params={"sensor_cfg": SceneEntityCfg("raycaster")}
+    )
+
+    stability = RewTerm(
+        func=mdp.imu_stability_reward,
+        weight=-0.1,
+        params={"sensor_cfg": SceneEntityCfg("imu")}
     )
 
     action_rate = RewTerm(
@@ -124,21 +200,70 @@ class RewardsCfg:
 
     alive = RewTerm(
         func=mdp.is_alive, 
-        weight=-10.0
+        weight=-1.0
     )
 
 
 @configclass
-class MyEventCfg(MoveStraightEventCfg):
+class MyEventCfg():
     """Event specifications for the MDP."""
 
+    reset_robot_base = EventTerm(
+        func=mdp.reset_robot_base_curriculum,
+        mode="reset",
+        # params={
+        #     "asset_cfg": SceneEntityCfg("robot"),
+        #     "pose_range": {
+        #         "x": (0.0, 0.0), 
+        #         "y": (0.0, 0.0), 
+        #         "z": (0.1, 0.1),
+        #         "roll": (0.0, 0.0),
+        #         "pitch": (0.0, 0.0),
+        #         "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
+        #     },
+        #     "velocity_range": {}, # Sets all velocities to 0
+        # },
+    )
+
+    reset_target_position = EventTerm(
+        func=mdp.reset_target_marker_location,
+        mode="reset",
+        params={"y_range": (-0.1, 0.1), "x_pos": 3.0},
+    )
 
 
 @configclass
-class TerminationsCfg(ObstacleAvoidanceTerminationsCfg):
+class TerminationsCfg():
     """Termination terms for the MDP."""
 
-    target_reached = None
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+
+    target_reached = DoneTerm(
+        func=mdp.target_reached, 
+        params={
+            "robot_cfg": SceneEntityCfg("robot"), 
+            "distance": 0.2, # 0.1m cone + 0.1m robot radius
+        } 
+    )
+
+    illegal_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_sensor"), 
+            "threshold": 1.0, # Force in Newtons
+        },
+    )
+
+
+@configclass
+class CurriculumCfg:
+    """Curriculum terms for the MDP."""
+
+    # This will check the success rate every 100 steps
+    adaptive_task = CurTerm(
+        func=mdp.adaptive_curriculum,
+        params={"threshold": 0.9},
+    )
 
 
 
@@ -149,10 +274,10 @@ class TerminationsCfg(ObstacleAvoidanceTerminationsCfg):
 
 @configclass
 class CorridorEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for ict bot to move straight."""
+    """Configuration for ict bot."""
 
     # Scene settings
-    scene: CorridorEnvSceneCfg = CorridorEnvSceneCfg(num_envs=4096, env_spacing=10.0)
+    scene: CorridorEnvSceneCfg = CorridorEnvSceneCfg(num_envs=4096, env_spacing=15.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -160,15 +285,18 @@ class CorridorEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
+
+    target_marker_cfg = TARGET_CONE_CFG
 
     def __post_init__(self):
         """Post initialization."""
         # general settings
-        self.decimation = 4
+        self.decimation = 2
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 30.0
+        self.episode_length_s = 20.0
         # simulation settings
-        self.sim.dt = 1.0 / 60.0
+        self.sim.dt = 1.0 / 100.0
 
 
 ##
@@ -183,11 +311,33 @@ class CorridorEnv(ManagerBasedRLEnv):
     
     def __init__(self, cfg: CorridorEnvCfg, render_mode: str | None = None, **kwargs):
 
+        self.target_pos = torch.zeros((cfg.scene.num_envs, 3), device=cfg.sim.device)
+        self.prev_tgt_dist = torch.zeros(cfg.scene.num_envs, device=cfg.sim.device)
+
         super().__init__(cfg, render_mode, **kwargs)
+
+        # Access the event parameters
+        target_params = self.cfg.events.reset_target_position.params
+        # We'll assume you add these new keys to your EventCfg (see below)
+        robot_params = self.cfg.events.reset_robot_base.params
+
+        # Initialize Curriculum Variables from Config
+        # This allows PLAY mode to override them
+        self.active_y_range = target_params.get("y_range", (-0.1, 0.1))
+        self.active_x_pos = target_params.get("x_pos", 3.0)
+        self.spawn_yaw_range = robot_params.get("yaw_range", 0.0)
+        self.lidar_enabled = robot_params.get("lidar_enabled", False)
+        self.curr_level = robot_params.get("curr_level", 1)
+        
+        # Initialize Curriculum/Success Trackers
+        self.extras["success_rate"] = torch.zeros(self.num_envs, device=self.device)
         
         # Find wheel joint indices
         indices, _ = self.scene["robot"].find_joints(self.cfg.wheel_dof_name)
         self._wheel_indices = torch.tensor(indices, device=self.device, dtype=torch.long)
+
+        # Use the config from the EnvCfg
+        self.target_marker = VisualizationMarkers(self.cfg.target_marker_cfg)
     
     def _reset_idx(self, env_ids: Sequence[int] | None) -> None:
         """Reset selected environments."""
@@ -198,8 +348,20 @@ class CorridorEnv(ManagerBasedRLEnv):
             env_ids = torch.arange(self.num_envs, device=self.device)
         else:
             env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+
+        # 2. Immediately update the visual marker position for the reset envs
+        if self.sim.has_gui():
+            # We must pass the positions for ALL envs, or use a slice. 
+            # The most robust way is to update all or use the visualizer's internal state.
+            self.target_marker.visualize(self.target_pos)
+
+        current_root_pos = self.scene["robot"].data.root_pos_w[env_ids]
+        self.prev_tgt_dist[env_ids] = torch.norm(self.target_pos[env_ids] - current_root_pos, dim=-1)
         
         num_resets = len(env_ids)
+
+        # Reset Success tracker for these specific envs
+        self.extras["success_rate"][env_ids] = 0.0
         
         # Reset wheel joint positions and velocities to zero
         num_wheels = len(self._wheel_indices)
@@ -212,3 +374,16 @@ class CorridorEnv(ManagerBasedRLEnv):
             joint_ids=self._wheel_indices,
             env_ids=env_ids,
         )
+
+    def _step_impl(self, actions: torch.Tensor):
+        # Calculate 2D distance by zeroing out the Z difference
+        target_rel_world = self.target_pos - self.scene["robot"].data.root_pos_w
+        target_rel_world[:, 2] = 0.0 
+        self.prev_tgt_dist[:] = torch.norm(target_rel_world, dim=-1)
+        
+        # Perform physics step
+        super()._step_impl(actions)
+        
+        # Update visualization markers so they follow the 'target_pos' logic
+        if self.sim.has_gui():
+            self._set_debug_vis_impl(True)

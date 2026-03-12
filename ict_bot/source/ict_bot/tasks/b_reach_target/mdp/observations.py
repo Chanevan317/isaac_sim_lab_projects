@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 def rel_target_pos(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     """Target position in robot's USD local frame."""
     robot = env.scene[robot_cfg.name]
-    # target = env.scene[target_cfg.name]
     target = env.target_pos
     pos_w = target - robot.data.root_pos_w
     q_inv = quat_inv(robot.data.root_quat_w)

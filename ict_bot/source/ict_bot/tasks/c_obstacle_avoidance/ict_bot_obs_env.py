@@ -13,7 +13,6 @@ from ict_bot.tasks.b_reach_target.ict_bot_target_env import ReachTargetSceneCfg
 from ict_bot.tasks.a_move_straight.ict_bot_env import ActionsCfg as MoveStraightActionsCfg
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import MyEventCfg as ReachTargetEventCfg
 from ict_bot.tasks.b_reach_target.ict_bot_target_env import TerminationsCfg as ReachTargetTerminationsCfg
-from isaaclab.sensors import MultiMeshRayCasterCfg, patterns, ContactSensorCfg
 import isaaclab.sim as sim_utils
 
 import os
@@ -23,6 +22,7 @@ from ict_bot import ICT_BOT_ASSETS_DIR
 # import mdp
 import ict_bot.tasks.c_obstacle_avoidance.mdp as mdp
 from isaaclab.assets import AssetBaseCfg
+from isaaclab.sensors import MultiMeshRayCasterCfg, patterns, ContactSensorCfg
 from isaaclab.envs import ManagerBasedRLEnv, ManagerBasedRLEnvCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers import VisualizationMarkers

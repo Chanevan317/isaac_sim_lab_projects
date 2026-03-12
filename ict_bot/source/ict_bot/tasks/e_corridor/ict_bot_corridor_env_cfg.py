@@ -20,7 +20,7 @@ class IctBotCorridorEnvCfg(CorridorEnvCfg):
 
     # Action/Observation/State spaces
     action_space = 2        # [linear_vel, angular_vel]
-    observation_space = 316  # 316 = 3 (root pos) + 4 (root quat) + 2*2 (wheel joint pos/vel) + 300 (raycast)
+    observation_space = 88  # 316 = 3 (root pos) + 4 (root quat) + 2*2 (wheel joint pos/vel) + 72 (raycast)
     state_space = 0
     
     # Physical properties
@@ -45,5 +45,17 @@ class IctBotCorridorEnvCfg_PLAY(IctBotCorridorEnvCfg):
         super().__post_init__()
         # make a smaller scene for play
         self.scene.num_envs = 1
+
+        if hasattr(self.events, "reset_target_position"):
+            self.events.reset_target_position.params.update({
+                "y_range": (-1.35, 1.35),
+                "x_pos": 10.0,
+            })
+            self.events.reset_robot_base.params.update({
+                "yaw_range": 3.1415, # Full 360
+                "lidar_enabled": True,
+                "curr_level": 4
+            })
+
         # disable randomization for play
         self.observations.policy.enable_corruption = False
