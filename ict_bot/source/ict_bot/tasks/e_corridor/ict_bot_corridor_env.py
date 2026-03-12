@@ -158,26 +158,26 @@ class RewardsCfg:
     # --- POSITIVE MOTIVATION ---
     progress = RewTerm(
         func=mdp.progress_to_target,
-        weight=15.0,
+        weight=10.0,
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     align = RewTerm(
         func=mdp.align_to_target,
-        weight=3.0,
+        weight=10.0,
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     reached = RewTerm(
         func=mdp.target_reached,
-        weight=200.0,
-        params={"robot_cfg": SceneEntityCfg("robot")}
+        weight=2000.0,
+        params={"robot_cfg": SceneEntityCfg("robot"), "distance": 0.8}
     )
 
     # --- NEGATIVE CONSTRAINTS ---
     no_reverse = RewTerm(
         func=mdp.penalty_anti_reverse, 
-        weight=-1000.0, 
+        weight=-2.0, 
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
@@ -195,12 +195,12 @@ class RewardsCfg:
 
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.1,
+        weight=-0.01,
     )
 
     alive = RewTerm(
         func=mdp.is_alive, 
-        weight=-1.0
+        weight=0.1
     )
 
 
@@ -211,18 +211,21 @@ class MyEventCfg():
     reset_robot_base = EventTerm(
         func=mdp.reset_robot_base_curriculum,
         mode="reset",
-        # params={
-        #     "asset_cfg": SceneEntityCfg("robot"),
-        #     "pose_range": {
-        #         "x": (0.0, 0.0), 
-        #         "y": (0.0, 0.0), 
-        #         "z": (0.1, 0.1),
-        #         "roll": (0.0, 0.0),
-        #         "pitch": (0.0, 0.0),
-        #         "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
-        #     },
-        #     "velocity_range": {}, # Sets all velocities to 0
-        # },
+        params={
+            "yaw_range": 0.0,
+            "lidar_enabled": False,
+            "curr_level": 1,
+            "asset_cfg": SceneEntityCfg("robot"),
+            # "pose_range": {
+            #     "x": (0.0, 0.0), 
+            #     "y": (0.0, 0.0), 
+            #     "z": (0.1, 0.1),
+            #     "roll": (0.0, 0.0),
+            #     "pitch": (0.0, 0.0),
+            #     "yaw": (-3.14, 3.14),  # Random heading (Full 360 degrees)
+            # },
+            # "velocity_range": {}, # Sets all velocities to 0
+        },
     )
 
     reset_target_position = EventTerm(
@@ -242,7 +245,7 @@ class TerminationsCfg():
         func=mdp.target_reached, 
         params={
             "robot_cfg": SceneEntityCfg("robot"), 
-            "distance": 0.2, # 0.1m cone + 0.1m robot radius
+            "distance": 0.8, # 0.1m cone + 0.1m robot radius
         } 
     )
 
@@ -262,7 +265,7 @@ class CurriculumCfg:
     # This will check the success rate every 100 steps
     adaptive_task = CurTerm(
         func=mdp.adaptive_curriculum,
-        params={"threshold": 0.9},
+        params={"threshold": 0.8},
     )
 
 
@@ -277,7 +280,7 @@ class CorridorEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for ict bot."""
 
     # Scene settings
-    scene: CorridorEnvSceneCfg = CorridorEnvSceneCfg(num_envs=4096, env_spacing=15.0)
+    scene: CorridorEnvSceneCfg = CorridorEnvSceneCfg(num_envs=4096, env_spacing=20.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -294,7 +297,7 @@ class CorridorEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 20.0
+        self.episode_length_s = 45.0
         # simulation settings
         self.sim.dt = 1.0 / 100.0
 
@@ -359,9 +362,6 @@ class CorridorEnv(ManagerBasedRLEnv):
         self.prev_tgt_dist[env_ids] = torch.norm(self.target_pos[env_ids] - current_root_pos, dim=-1)
         
         num_resets = len(env_ids)
-
-        # Reset Success tracker for these specific envs
-        self.extras["success_rate"][env_ids] = 0.0
         
         # Reset wheel joint positions and velocities to zero
         num_wheels = len(self._wheel_indices)

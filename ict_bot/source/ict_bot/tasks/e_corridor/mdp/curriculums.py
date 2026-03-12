@@ -10,12 +10,12 @@ if TYPE_CHECKING:
     from isaaclab.managers import SceneEntityCfg
 
 
-def reset_robot_base_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor):
+def reset_robot_base_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, asset_cfg: SceneEntityCfg, yaw_range: float = 0.0, lidar_enabled: bool = False, curr_level: int = 1):
     """Wrapper that pulls dynamic yaw/pos from env and calls the built-in reset."""
 
     # FRONT is -Y, TARGET is +X. 
     # To point local -Y to world +X, base yaw must be -1.5708 rad (-90 deg)
-    base_yaw = -1.5708 
+    base_yaw = 1.5708 
     
     # Pull dynamic range from the env (set by your curriculum function)
     yaw_range = getattr(env, "spawn_yaw_range", 0.0) 
@@ -33,11 +33,12 @@ def reset_robot_base_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor):
     velocity_range = {}
 
     # Call the built-in Isaac Lab function with our dynamic range
-    return reset_root_state_uniform(env, env_ids, pose_range, velocity_range, asset_cfg=SceneEntityCfg("robot"))
+    return reset_root_state_uniform(env, env_ids, pose_range, velocity_range, asset_cfg)
 
 
-def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold: float = 0.9):
+def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold: float = 0.8):
     current_success = torch.mean(env.extras.get("success_rate", torch.tensor(0.0)))
+    print(f"DEBUG: Level: {getattr(env, 'curr_level', 'N/A')} | Success: {current_success:.4f}")
 
     if not hasattr(env, "curr_level"): env.curr_level = 1
 
@@ -47,6 +48,7 @@ def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold
             env.spawn_yaw_range = 0.785 # +/- 45 deg
             env.curr_level = 2
             print(f">>> Level 2: Orientation Enabled (Success: {current_success:.2f})")
+            env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
             
         # Phase 2 -> 3: 10m Distance + Full 360 Orientation
         elif env.curr_level == 2:
@@ -54,6 +56,7 @@ def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold
             env.spawn_yaw_range = 3.1415 # Full 360
             env.curr_level = 3
             print(f">>> Level 3: 10m Distance + Full Heading")
+            env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
 
         # Phase 3 -> 4: Unlock LIDAR & Wide Corridor
         elif env.curr_level == 3:
@@ -61,14 +64,4 @@ def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold
             env.lidar_enabled = True # This "unmasks" the observation function!
             env.curr_level = 4
             print(f">>> Level 4: LIDAR Observation UNLOCKED")
-
-
-def get_lidar_observations(env: ManagerBasedRLEnv):
-    # Get real data [num_envs, 72]
-    lidar_data = env.scene["raycaster"].data.distances
-    
-    # If the flag hasn't been set by Level 4, return zeros
-    if not getattr(env, "lidar_enabled", False):
-        return torch.zeros_like(lidar_data)
-        
-    return lidar_data
+            env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])

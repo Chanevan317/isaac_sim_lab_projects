@@ -24,6 +24,26 @@ def progress_to_target(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     distance_moved = env.prev_tgt_dist - current_dist
     return distance_moved / env.step_dt
 
+    # """Rewards moving closer to the target, scaled by heading alignment."""
+    # local_pos = rel_target_pos(env, robot_cfg)
+    # current_dist = torch.norm(local_pos, dim=-1)
+    
+    # # Calculate raw progress
+    # distance_moved = env.prev_tgt_dist - current_dist
+    # progress = distance_moved / env.step_dt
+    
+    # # --- DYNAMIC GATE ---
+    # # Use your heading_error [sin, cos]. cos is 1.0 at 0 deg, 0.0 at 90 deg.
+    # error_vec = heading_error(env, robot_cfg)
+    # cos_error = error_vec[:, 1]
+    
+    # # Scale progress: Only pay if facing within +/- 90 degrees (cos > 0)
+    # # We use torch.clamp to ensure we don't reward "negative progress" (moving away) 
+    # # while facing the wrong way.
+    # gate = torch.clamp(cos_error, min=0.0)
+    
+    # return progress * gate
+
 
 def align_to_target(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     """Rewards facing the target (-Y front)."""

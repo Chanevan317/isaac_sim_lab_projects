@@ -37,14 +37,23 @@ def heading_error(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg):
     return torch.stack([torch.sin(angle), torch.cos(angle)], dim=-1)
 
 
-def target_reached(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, distance: float = 0.2):
+def target_reached(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, distance: float = 0.8):
     robot = env.scene[robot_cfg.name]
-    # Use the target_pos stored on the env
-    dist = torch.norm(env.target_pos - robot.data.root_pos_w, dim=-1)
-    reached = dist < distance
+
+    # Calculate distance (Ignoring Z is better for accuracy)
+    diff = env.target_pos - robot.data.root_pos_w
+    diff[:, 2] = 0.0 
+    dist = torch.norm(diff, dim=-1)
     
-    # Log to extras for the curriculum manager to see
-    env.extras["success_rate"] = reached.float()
+    reached = (dist < distance)
+    
+    # Use torch.max to ensure that if a robot hit the target AT ANY POINT 
+    # during this iteration, it stays a 1.0
+    if "success_rate" not in env.extras:
+        env.extras["success_rate"] = reached.float()
+    else:
+        env.extras["success_rate"] = torch.max(env.extras["success_rate"], reached.float())
+        
     return reached
 
 
