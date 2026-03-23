@@ -47,26 +47,22 @@ def target_reached(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, distance: 
     
     reached = (dist < distance)
     
-    # Use torch.max to ensure that if a robot hit the target AT ANY POINT 
-    # during this iteration, it stays a 1.0
+    # Track the current success of this specific step
+    # Your wrapper/runner should handle the 'mean success' over episodes.
+    # If you are triggering level-ups based on env.extras, 
+    # use a momentum-based update instead:
     if "success_rate" not in env.extras:
         env.extras["success_rate"] = reached.float()
     else:
-        env.extras["success_rate"] = torch.max(env.extras["success_rate"], reached.float())
+        # Smoothly update the rate (0.01 is a small alpha for a moving average)
+        env.extras["success_rate"] = 0.99 * env.extras["success_rate"] + 0.01 * reached.float()
         
     return reached
 
 
-def lidar_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_distance: float = 1.0):
+def lidar_distances(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_distance: float = 2.0):
     """Returns normalized Lidar distances [0, 1]. 0 is hit, 1 is clear."""
     raycaster = env.scene[sensor_cfg.name]
-
-    # --- CURRICULUM MASK ---
-    # If not Phase 4, return 1.0 (All Clear)
-    if not getattr(env, "lidar_enabled", False):
-        # Return a tensor of 1s with the correct shape: [num_envs, num_rays]
-        num_rays = raycaster.data.ray_hits_w.shape[1]
-        return torch.ones((env.num_envs, num_rays), device=env.device)
     
     # ray_hits_w is [num_envs, num_rays, 3]
     # pos_w is [num_envs, 3]

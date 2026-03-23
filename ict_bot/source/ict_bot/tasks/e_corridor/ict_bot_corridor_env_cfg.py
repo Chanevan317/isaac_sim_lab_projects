@@ -48,13 +48,12 @@ class IctBotCorridorEnvCfg_PLAY(IctBotCorridorEnvCfg):
 
         if hasattr(self.events, "reset_target_position"):
             self.events.reset_target_position.params.update({
-                "y_range": (-0.25, 0.25),
+                "y_range": (-0.135, 0.135),
                 "x_range": (1.5, 3.0),
             })
             self.events.reset_robot_base.params.update({
                 "yaw_range": 3.1415,
-                "lidar_enabled": False,
-                "curr_level": 3
+                "curr_level": 6
             })
 
         # disable randomization for play

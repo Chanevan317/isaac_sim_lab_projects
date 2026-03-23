@@ -247,11 +247,7 @@ class TerminationsCfg():
 
     no_progress = DoneTerm(
         func=mdp.stagnation_termination,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "threshold": 0.01,
-            "time_limit": 2.0
-        }
+        params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     reached_termination = DoneTerm(
@@ -306,7 +302,7 @@ class CorridorEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 30
+        self.episode_length_s = 45.0
         # simulation settings
         self.sim.dt = 1.0 / 100.0
 
@@ -338,7 +334,6 @@ class CorridorEnv(ManagerBasedRLEnv):
         self.active_y_range = target_params.get("y_range", (-0.1, 0.1))
         self.active_x_pos = target_params.get("x_range", (0.9, 1.1))
         self.spawn_yaw_range = robot_params.get("yaw_range", 0.0)
-        self.lidar_enabled = robot_params.get("lidar_enabled", False)
         self.curr_level = robot_params.get("curr_level", 1)
         
         # Initialize Curriculum/Success Trackers

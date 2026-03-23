@@ -43,27 +43,94 @@ def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold
     if not hasattr(env, "curr_level"): env.curr_level = 1
 
     if current_success >= threshold:
+        # If using Isaac Lab's standard record_episode_statistics:
+        # if hasattr(env, "extras"):
+        #     # Clear the buffers so the mean success rate resets to 0
+        #     if "episode" in env.extras:
+        #         for key in env.extras["episode"]:
+        #             if isinstance(env.extras["episode"][key], torch.Tensor):
+        #                 env.extras["episode"][key].fill_(0)
+            
+        #     # If you are using a custom deque for success rate:
+        #     if hasattr(env, "success_buf"):
+        #         env.success_buf.clear()
+
         # Phase 1 -> 2: Add 45-degree orientation randomness
         if env.curr_level == 1:
+            env.active_y_range = (-0.25, 0.25)
             env.spawn_yaw_range = 0.785 # +/- 45 deg
             env.active_x_pos = (1.0, 2.0)
             env.curr_level = 2
-            print(f">>> Level 2: Orientation Enabled (Success: {current_success:.2f})")
+            print(f">>> Level 2: Orientation 90 deg")
             env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
-            
-        # Phase 2 -> 3: 10m Distance + Full 360 Orientation
+        
+        # Phase 2 -> 3: Add 45-degree orientation randomness
         elif env.curr_level == 2:
-            env.active_y_range = (-0.25, 0.25)
-            env.active_x_pos = (2.0, 3.0)
-            env.spawn_yaw_range = 3.1415 # Full 360
+            env.active_y_range = (-0.75, 0.75)
+            env.spawn_yaw_range = 1.8326 # +/- 105 deg
+            env.active_x_pos = (1.5, 3.0)
             env.curr_level = 3
-            print(f">>> Level 3: 10m Distance + Full Heading")
+            print(f">>> Level 3: Orientation 210 deg")
             env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
 
-        # Phase 3 -> 4: Unlock LIDAR & Wide Corridor
+        # Phase 3 -> 4:  Full 360 Orientation
         elif env.curr_level == 3:
             env.active_y_range = (-1.35, 1.35)
-            env.lidar_enabled = True # This "unmasks" the observation function!
+            env.spawn_yaw_range = 3.1415 # Full 360
             env.curr_level = 4
-            print(f">>> Level 4: LIDAR Observation UNLOCKED")
+            print(f">>> Level 4: Full Heading")
             env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
+
+        # Phase 4 -> 5: Unlock IMU
+        elif env.curr_level == 4:
+            env.curr_level = 5
+            print(f">>> Level 5: IMU Observation unlocked")
+            env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
+
+        # Phase 5 -> 6: Unlock Lidar
+        elif env.curr_level == 5:
+            env.lidar_enabled = True 
+            env.curr_level = 6
+            print(f">>> Level 6: LIDAR Observation unlocked")
+            env.extras["success_rate"] = torch.zeros_like(env.extras["success_rate"])
+
+
+        if hasattr(env, "runner"):
+            agent = env.runner.agent
+            
+            # --- Professional Hyperparameter Strategy ---
+            if env.curr_level <= 2:
+                # Base learning for simple forward movement
+                new_lr = 3e-4 
+                new_entropy = 0.01 
+            elif env.curr_level == 3:
+                # Step up: Moderate boost to handle wider target angles
+                new_lr = 4e-4 
+                new_entropy = 0.02
+            elif env.curr_level == 4:
+                # The Pivot: High energy and exploration to discover the 180-degree turn
+                new_lr = 5e-4 
+                new_entropy = 0.05
+            else: # Level 5 and 6 (Sensors/IMU/Lidar)
+                # Mastery: Lower the values to "cool down" the policy. 
+                # This stops the jitter and allows the robot to learn precise sensor-based steering.
+                new_lr = 3e-4 
+                new_entropy = 0.02
+
+            # 1. Update the Optimizer (Current Weights)
+            for param_group in agent.optimizer.param_groups:
+                param_group['lr'] = new_lr
+                
+            # 2. Update the Scheduler (Prevents immediate reversal)
+            if hasattr(agent, "scheduler") and agent.scheduler is not None:
+                # Set the internal base learning rate for the KLAdaptiveLR scheduler
+                agent.scheduler._lr = new_lr
+                # Reset the multiplier so it starts fresh at 1.0 for the new level
+                if hasattr(agent.scheduler, "_multiplier"):
+                    agent.scheduler._multiplier = 1.0
+
+            # 3. Update Entropy (Internal skrl attribute)
+            if hasattr(agent, "_entropy_loss_scale"):
+                agent._entropy_loss_scale = new_entropy
+                
+            print(f">>> LEVEL UP: {env.curr_level} | Setting LR: {new_lr}, Entropy: {new_entropy}")
