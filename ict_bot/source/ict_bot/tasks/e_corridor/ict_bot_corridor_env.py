@@ -193,6 +193,12 @@ class RewardsCfg:
         params={"sensor_cfg": SceneEntityCfg("imu")}
     )
 
+    posture = RewTerm(
+        func=mdp.base_posture_penalty,
+        weight=1.0,
+        params={"sensor_cfg": SceneEntityCfg("imu")}
+    )
+
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
         weight=-0.01,
@@ -200,7 +206,7 @@ class RewardsCfg:
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-0.0005 
+        weight=-0.005 
     )
 
     alive = RewTerm(

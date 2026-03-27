@@ -22,7 +22,7 @@ ICT_BOT_CFG = ArticulationCfg(
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             rigid_body_enabled=True,
             max_linear_velocity=1.0,
-            max_angular_velocity=4.0,
+            max_angular_velocity=1.5,
             max_depenetration_velocity=10.0,
             enable_gyroscopic_forces=True,
         ),

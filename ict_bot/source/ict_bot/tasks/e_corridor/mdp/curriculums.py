@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from isaaclab.managers import SceneEntityCfg
 
 
-def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold: float = 0.85):
+def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold: float = 0.9):
     # Check if a fixed level is defined in the config
     # We look for 'fixed_play_level' which we just added above
     fixed_level = getattr(env.cfg, "fixed_play_level", None)
@@ -47,11 +47,11 @@ def adaptive_curriculum(env: ManagerBasedRLEnv, env_ids: torch.Tensor, threshold
         env.level_up_timer = 0
 
     if env.curr_level == 1:
-        ready_to_level_up = (env.level_up_timer > 1000) 
+        ready_to_level_up = (env.level_up_timer > 500) 
     elif env.curr_level == 2:
-        ready_to_level_up = (env.level_up_timer > 3000)  
+        ready_to_level_up = (env.level_up_timer > 1500)  
     else:
-        ready_to_level_up = (env.level_up_timer > 6000)   
+        ready_to_level_up = (env.level_up_timer > 3000)   
 
     if ready_to_level_up:
 

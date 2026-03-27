@@ -27,7 +27,7 @@ class IctBotCorridorEnvCfg(CorridorEnvCfg):
     wheel_radius = 0.1
     wheel_spacing = 0.16
     max_linear_velocity = 1.0
-    max_angular_velocity = 4.0
+    max_angular_velocity = 1.5
     
     # Custom parameters/scales
     wheel_dof_name = [
@@ -46,7 +46,7 @@ class IctBotCorridorEnvCfg_PLAY(IctBotCorridorEnvCfg):
         # make a smaller scene for play
         self.scene.num_envs = 1
 
-        self.fixed_play_level = 3
+        self.fixed_play_level = 1
 
         # disable randomization for play
         self.observations.policy.enable_corruption = False
