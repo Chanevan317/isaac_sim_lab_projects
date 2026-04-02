@@ -125,9 +125,15 @@ class RewardsCfg:
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
+    speed_bonus = RewTerm(
+        func=mdp.reward_forward_speed,
+        weight=30.0,
+        params={"robot_cfg": SceneEntityCfg("robot")}
+    )
+
     reached = RewTerm(
         func=mdp.target_reached_reward,
-        weight=10.0,
+        weight=50.0,
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
@@ -135,13 +141,24 @@ class RewardsCfg:
 
     backward = RewTerm(
         func=mdp.penalize_backwards_movement,
-        weight=-1.0,
+        weight=-5.0,
         params={"robot_cfg": SceneEntityCfg("robot")}
     )
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-0.01,
+        weight=-0.0001,
+        params={"asset_cfg": SceneEntityCfg("robot")}
+    )
+
+    action_rate = RewTerm(
+        func=mdp.action_rate_l2,
+        weight=-0.25,
+    )
+
+    alive = RewTerm(
+        func=mdp.is_alive,
+        weight=-0.5,
     )
 
 
@@ -199,19 +216,19 @@ class MyEventCfg():
     )
 
     # Push randomization — random impulses simulate bumps and disturbances
-    push_robot = EventTerm(
-        func=mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(3.0, 6.0),  # random push every 3–6 seconds
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "velocity_range": {
-                "x": (-0.3, 0.3),
-                "y": (-0.3, 0.3),
-                "yaw": (-0.5, 0.5),
-            }
-        }
-    )
+    # push_robot = EventTerm(
+    #     func=mdp.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(3.0, 6.0),  # random push every 3–6 seconds
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "velocity_range": {
+    #             "x": (-0.3, 0.3),
+    #             "y": (-0.3, 0.3),
+    #             "yaw": (-0.5, 0.5),
+    #         }
+    #     }
+    # )
 
 
 @configclass
@@ -258,7 +275,7 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 5
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 20.0
+        self.episode_length_s = 30.0
         # simulation settings
         self.sim.dt = 1.0 / 100.0
 

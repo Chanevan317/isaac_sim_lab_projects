@@ -240,19 +240,46 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             finished_lengths = ep_lengths[dones]
             ep_count += dones.sum().item()
 
-            print("\n" + "=" * 60)
-            print(f"  Episode Count     : {int(ep_count)}")
-            print(f"  Timestep          : {timestep} / {timesteps}  ({100*timestep/timesteps:.1f}%)")
-            print(f"  Envs finished     : {dones.sum().item():.0f} / {env_cfg.scene.num_envs}")
-            print(f"  Mean Episode Ret  : {finished_rewards.mean().item():.4f}  <- should trend UP")
-            print(f"  Max Episode Ret   : {finished_rewards.max().item():.4f}")
-            print(f"  Min Episode Ret   : {finished_rewards.min().item():.4f}")
-            print(f"  Mean Episode Len  : {finished_lengths.mean().item():.1f}  <- should trend DOWN")
-            print(f"  Max Episode Len   : {finished_lengths.max().item():.1f}")
-            print("=" * 60)
+            # Accumulate for periodic reporting
+            if not hasattr(custom_record_transition, "accum_rewards"):
+                custom_record_transition.accum_rewards = []
+                custom_record_transition.accum_lengths = []
+
+            custom_record_transition.accum_rewards.append(finished_rewards)
+            custom_record_transition.accum_lengths.append(finished_lengths)
 
             ep_rewards[dones] = 0.0
             ep_lengths[dones] = 0.0
+
+        # Print every 500 timesteps only
+        if timestep % 500 == 0:
+            accum_r = custom_record_transition.__dict__.get("accum_rewards", [])
+            accum_l = custom_record_transition.__dict__.get("accum_lengths", [])
+
+            if accum_r:
+                all_r = torch.cat(accum_r)
+                all_l = torch.cat(accum_l)
+
+                success_rate = env.extras.get(
+                    "success_rate", torch.tensor(0.0)
+                )
+                if hasattr(success_rate, "item"):
+                    success_rate = success_rate.item()
+
+                print("\n" + "=" * 60)
+                print(f"  Timestep          : {timestep} / {timesteps}  ({100*timestep/timesteps:.1f}%)")
+                print(f"  Episodes finished : {int(ep_count)}")
+                print(f"  Mean Reward       : {all_r.mean().item():.4f}")
+                print(f"  Max  Reward       : {all_r.max().item():.4f}")
+                print(f"  Min  Reward       : {all_r.min().item():.4f}")
+                print(f"  Mean Ep Length    : {all_l.mean().item():.1f}")
+                print(f"  Min  Ep Length    : {all_l.min().item():.1f}")
+                print(f"  Success Rate      : {success_rate:.4f}")
+                print("=" * 60)
+
+                # Clear accumulators for next window
+                custom_record_transition.accum_rewards = []
+                custom_record_transition.accum_lengths = []
 
     runner.agent.record_transition = custom_record_transition
     # ---- END BLOCK ----
